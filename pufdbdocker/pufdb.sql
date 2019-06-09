@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS CMS_PUF.HCPCS (
 	                  
 CREATE TABLE IF NOT EXISTS CMS_PUF.GEN_ENT (
 	                  NPI VARCHAR(16) PRIMARY KEY,
-	                  GENDER CHAR(1),
+	                  GENDER CHAR(2),
 	                  PROV_TYPE CHAR(1));
 
 CREATE TABLE IF NOT EXISTS CMS_PUF.CLAIM (
