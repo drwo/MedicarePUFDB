@@ -3,3 +3,4 @@
 .RData
 .Ruserdata
 rawData/*.txt
+pufdbdocker/*.tsv
