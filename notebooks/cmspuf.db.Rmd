@@ -1,0 +1,82 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+DBNAME <- "CMS_PUF"
+USER <- "mysqladmin"
+PASSWD <- "Java!Warrior"
+HOST <- "192.168.168.47"
+```
+
+```{r}
+create.pufdb <- function(dbname = DBNAME, user = USER, passwd = PASSWD, host = HOST) {
+  conn <- dbConnect(RMySQL::MySQL(), username = user, password = passwd, host = host)
+  dbSendQuery(conn, paste("CREATE DATABASE IF NOT EXISTS", dbname, ";"))
+  dbDisconnect(conn)
+}
+```
+
+```{r}
+pufdb.connect <- function(dbname = DBNAME, user = USER, passwd = PASSWD, host = HOST) {
+  dbConnect(RMySQL::MySQL(), dbname = dbname, username = user, password = passwd, host = host)
+}
+```
+
+
+
+```{r}
+send.puf.query <- function(query = NULL) {
+  conn <- pufdb.connect()
+  dbSendQuery(conn, query)
+  dbDisconnect(conn)
+}
+```
+
+```{r}
+create.hcpcs.tbl <- function() {
+  send.puf.query("CREATE TABLE IF NOT EXISTS HCPCS (
+	                  HCPCS_CODE VARCHAR(16) PRIMARY KEY,
+	                  DESCRIPTION VARCHAR(256));")
+}
+```
+
+```{r}
+create.genent.tbl <- function() {
+  send.puf.query("CREATE TABLE IF NOT EXISTS GEN_ENT (
+	                  NPI VARCHAR(16) PRIMARY KEY,
+	                  GENDER CHAR(1),
+	                  PROV_TYPE CHAR(1));")
+}
+```
+
+```{r}
+create.claim.tbl <- function() {
+  send.puf.query(
+    "CREATE TABLE IF NOT EXISTS CLAIM (
+	P_KEY INT PRIMARY KEY,
+	NPI VARCHAR(24),
+	ZIP INT,
+	SVC_PLACE CHAR,
+	HCPCS_CODE VARCHAR(16),
+	DRUG_INDICATOR CHAR,
+	SVC_COUNT INT,
+	BENE_COUNT INT,
+	BENE_DAY_SVC_COUNT INT,
+	AVG_ALLOWED_AMT DOUBLE,
+	AVG_CHRG_AMT DOUBLE,
+	AVG_PAYMENT DOUBLE,
+	YR INT
+  );"
+  )
+}
+```
+
+```{r}
+create.pufdb()
+create.hcpcs.tbl()
+create.genent.tbl()
+create.claim.tbl()
+```
+

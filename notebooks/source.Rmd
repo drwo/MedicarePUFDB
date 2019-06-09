@@ -1,0 +1,231 @@
+---
+title: "Medicare PUF DB, Part 1"
+author: "Tom Woteki, drwo@vt.edu"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+# Introduction
+
+## Project
+
+This notebook is Part 1 of a project that constructs a relational database from datasets known as the “Medicare Fee-For-Service Provider Utilization and Payment Data, Physician and Other Supplier Public Use File” downloaded from data.cms.gov. This notebook provides the code to import the rtaw data and prepare it for uploading into a MySQL datbase. Part 2 creates and loads the database. The resulting database is intended to be used as a source of data for the statistical computing courses offered as part of the Data Science option of the DAAS degree.
+
+## The Data
+
+The datasets provided by CMS cover 2012, 2013 and 2014. As provided by the Office of Information Products and Data Analytics of the Centers for Medicare and Medicaid Services (CMS), the datasets provide “information on utilization, payment (allowed amount and Medicare payment), and submitted charges by National Provider Identifier (NPI), type of provider, Healthcare Common Procedure Coding System (HCPCS) code, and place of service” for the calendar years 2012, 2013 and 2014. The data include payments to individual and organizational providers identified by NPI.
+
+In a “frequently asked question” section of its web site, CMS states that average payment was calculated as total payment for the services divided by quantity of the service delivered. Therefore, one convert average payments back to totals by multiplying the average payment by the quantity of the service.
+
+The datasets provide information on some 6,451 HCPCS codes. Corresponding to these there are fewer descriptions. That is, there are cases of multiple numeric codes that map to a common description. In its methodology documentation CMS explains that descriptions have been truncated to 256 characters. As a result, the same HCPCS description can be associated with more than one HCPCS code. We discuss this further below.
+
+A small number of records in the datasets pertain to providers in foreign locations. We have chosen to remove those so that the data pertain solely to US providers. See below.
+
+# Import and Standardize the Raw Data
+
+## Column Names
+There are 28 variables for each 2012 and 2013 record. The following defines the variable/column names for the 28 variables for both years. The names chosen parallel the names described in CMS's documentation "Medicare-Physician-and-Other-Supplier-PUF-Methodology" See the documentation for definitions of the variables.
+
+```{r}
+puf2013.colnames<-c("NPI", "org.name", "first.name", "mi", "credentials", "gender", "entity.code", "street1", "street2", "city", "zip", "state", "country", "prov.type", 
+                    "medicare.indicator", "svc.place", "hcpcs.code", "hcpcs.description", "drug.indicator", "svc.count", "bene.count", "bene.day.svc.count", 
+                    "avg.allowed.amt", "stdev.allowed.amt", "avg.chrg.amt", "stdev.chrg.amt", "avg.payment", "stdev.payment")
+```
+
+For 2014 CMS dropped the three standard deviations of payments and added a new payment variable: average medicare standard payment resulting in 25 variables. The following defines the variable/column names for the 25 variables for each 2014 record.
+
+```{r}
+puf2014.colnames<-c("NPI", "org.name", "first.name", "mi", "credentials", "gender", "entity.code", "street1", "street2", "city", "zip", "state", "country", "prov.type", 
+                    "medicare.indicator", "svc.place", "hcpcs.code", "hcpcs.description", "drug.indicator", "svc.count", "bene.count", "bene.day.svc.count", 
+                    "avg.allowed.amt", "avg.chrg.amt", "avg.payment", "avg.standard.amt")
+```
+## Column Classes
+The following defines the data classes for the 28 variables in each record. Three of the variables being counts (svc.count, bene.count, bene.day.svc.count) suggest that these values should be integers. However, in an earlier version of this project we found that at least one of these variables has floating point values. Hence we have classified all of the counts as numeric rather than integer. The remaining variables are classed as character, even though some could have been classed as factor, since we will eventually load the data into a database.
+
+```{r}
+puf2013.colclasses<-c("character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric")
+puf2014.colclasses<-c("character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric")
+```
+
+
+## Utility Import Function
+The following utility function imports data for a given year into a tibble. We skip 2 lines in the file (parameters skip=2, and header=FALSE). The first of these lines corresponds to the variable names in the CMS documentation
+and the second line is a copyright statement. Rather than edit the original files to remove the copyright statement we skip these 2 lines and provide our own, shorter, variable names as above. The files are tab delimited, hence parameter sep="\t". There are numerous instances of the character "'" as in CHILDREN'S HOSPITAL that can cause a problem. Hence we set parameter quote="" to avoid this. The remaining parameter settings should be self-explanatory
+
+```{r}
+read.puf <- function(path.to.data, col.names, col.classes) {
+  as_tibble(read.table(path.to.data, 
+                       sep="\t", na.strings=c("NA",""), header=FALSE, 
+                       comment.char="", quote="", col.names=col.names, colClasses=col.classes, skip=2))
+}
+```
+
+## Import Raw Data
+Here we import the raw data for each year. Recall that 2012 and 2013 each have 28 variables whereas 2014 has only 26.
+
+```{r}
+path.prefix <- "~/Documents/Workshop/RProjects/MedicarePUFDB/rawData/"
+puf2012 <- read.puf(paste(path.prefix, "Medicare_Provider_Util_Payment_PUF_CY2012.txt", sep=""), puf2013.colnames, puf2013.colclasses)
+puf2013 <- read.puf(paste(path.prefix, "Medicare_Provider_Util_Payment_PUF_CY2013.txt", sep=""), puf2013.colnames, puf2013.colclasses)
+puf2014 <- read.puf(paste(path.prefix, "Medicare_Provider_Util_Payment_PUF_CY2014.txt", sep=""), puf2014.colnames, puf2014.colclasses)
+```
+
+## Standardize Data
+The 2012 and 2013 data include three variables that are not in the 2014 data: std.dev.allowed.amt, stdev.chrg.amt and stdev.payment. We remove those columns to match 2014.
+
+```{r}
+puf2012 <- puf2012 %>%
+  select(-stdev.allowed.amt, -stdev.chrg.amt, -stdev.payment)
+puf2013 <- puf2013 %>%
+  select(-stdev.allowed.amt, -stdev.chrg.amt, -stdev.payment)
+```
+
+The 2014 dataset includes the variable avg.standard.amt not in 2012 or 2013. Delete it.
+```{r}
+puf2014 <- puf2014 %>%
+  select(-avg.standard.amt)
+```
+
+Add a year variable to each of the years:
+
+```{r}
+puf2012 <- puf2012 %>%
+  mutate(year = 2012)
+puf2013 <- puf2013 %>%
+  mutate(year = 2013)
+puf2014 <- puf2014 %>%
+  mutate(year = 2014)
+```
+
+Now that the 3 data frames are standardized, create one master and remove the 3 year frames:
+
+```{r}
+puf <- rbind(puf2012, puf2013, puf2014)
+rm(puf2012, puf2013, puf2014)
+gc()
+```
+
+We are only going to consider US providers. Remove the records where the provider was not located in the US or territories
+```{r}
+puf <- puf %>%
+  filter(country == "US" & entity.code != ".")
+n.cases <- nrow(puf)
+n.vars <- ncol(puf)
+```
+
+We now have a standardized dataset consisting of `r n.cases` rows and `r n.vars` variables.
+
+# Create Tables
+This section partitions the data into three subsets that will eventually be used to populate a database. The three are:
+
+    * claim: a table of all claims for services rendered and reimbursement requested with a primary key derived from four key variables as described below.
+    * hcpcs: a table of the HCPCS codes and their descriptors whose primary key is NPI.
+    * genent: a table providing gender and entity code (individual vs. organizational provider) for providers indexed by NPI. There are arw soe gender anomolies in the data that are discussed below.
+    
+## Claim Table
+In the Claim table each record represents a submission of a claim for reimbursement for services rendered by a provider and the amount paid by CMS.
+
+```{r}
+claim <- puf %>% 
+  select(NPI, zip, svc.place, hcpcs.code, drug.indicator, svc.count, bene.count, bene.day.svc.count, avg.allowed.amt, avg.chrg.amt, avg.payment, year)
+
+```
+
+The following demonstrates that the rows of claim are distinct. Equivalently, all of the variables combined are a compound primary key for the table.
+
+```{r}
+nrow(distinct(claim)) == nrow(claim)
+```
+
+By trial and error we searched for a smaller set of variables that in combination can be a primary key. The following demonstrates a set of four variables that suffice. 
+
+```{r}
+key <- claim %>%
+  select(NPI, svc.place, hcpcs.code, year) %>%
+  distinct()
+nrow(key) == nrow(claim)
+rm(key)
+```
+
+Surprising to me is that "svc.place" is a key. According to CMS documentation, place of service "Identifies whether the place of service submitted on the claims is a facility (value of ‘F’) or non-facility (value of ‘O’). Non-facility is generally an office setting; however other entities are included in non-facility". Contrast this with, for example the combination "NPI, zip, svc.count, hcpcs.code, year" that do not form a primary key.
+
+Now arrange the table according to the key we just identified:
+```{r}
+claim <- claim %>%
+  arrange(NPI, svc.place, hcpcs.code, year)
+```
+
+Add a column to be a convenient primary key:
+```{r}
+claim <- claim %>%
+  add_column(p.key = 1:nrow(claim), .before = "NPI")
+claim
+```
+
+## Gender-Entity Table
+This section builds a table that gender and entity code information by NPI. This table can then be joined to the Claim table, via NPI, to explore patterns in claims and reimbursement by gender end entity code.
+
+An initial version of the "genent" table:
+```{r}
+genent <- puf %>%
+  select(NPI, gender, entity.code) %>%
+  distinct()
+genent
+```
+
+The following shows that there are approximately 91 providers, identified by NPI, who are classified as both male and female. This can only occur with individual providers (entity.code == "I"). This is highly likely due to data entry errors. 
+
+```{r}
+bigen <- genent %>%
+  filter(entity.code == "I") 
+dplyr::intersect(filter(bigen, gender == "M") %>% select(NPI), filter(bigen, gender == "F") %>% select(NPI))
+```
+
+Since we do not know which gender is correct for these providers the following chunk deletes from the genent those that have both genders. Although this will affect any analysis of gender differences or entity differences the effects are likely to be very small given the very large number of providers and claims.
+
+```{r}
+genent <- genent %>%
+  filter(!(NPI %in% bigen$NPI))
+rm(bigen)
+```
+
+The following chunk demonstrates that the individual and organizational providers are disjoint sets.
+
+```{r}
+dplyr::intersect(filter(genent, entity.code == "I"), filter(genent, entity.code == "O"))
+```
+
+## HCPCS Table
+Create the HCPCS table. This table can be joined to the Claim table via hcpcs.code to provide descriptions of  services provided or claimed.
+
+Recall that some codes have the same description due to truncation by FDA. The following creates the unique code-description combinations:
+
+```{r}
+hcpcs <- puf %>%
+  select(hcpcs.code, hcpcs.description) %>%
+  distinct()
+n.codes <- hcpcs %>%
+  select(hcpcs.code) %>%
+  distinct() %>%
+  nrow()
+print(paste("number of code-description combinations = ", nrow(hcpcs)))
+print(paste("number of unique HCPCS codes = ", n.codes))
+```
+
+The preceding shows that some HCPCS have multiple descriptions. This is attributable to the truncation of descriptions as mentioned above. The following chunk picks one description at random to use as the unique description for purposes of the database. This does not discard information as the different descriptions are essentially the same and in many cases differ because of spelling errors or similar reasons.
+
+```{r}
+hcpcs <- hcpcs %>%
+  group_by(hcpcs.code) %>%
+  sample_n(1)
+```
+
+# Clean Up
+We don't need puf anymore. Let's delete it to save memory and session start up time.
+
+```{r}
+rm(puf)
+gc()
+```
+
