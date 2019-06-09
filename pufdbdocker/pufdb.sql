@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS CMS_PUF.GEN_ENT (
 CREATE TABLE IF NOT EXISTS CMS_PUF.CLAIM (
                   	P_KEY INT PRIMARY KEY,
                   	NPI VARCHAR(24),
-                  	ZIP INT,
+                  	ZIP CHAR(10),
                   	SVC_PLACE CHAR,
                   	HCPCS_CODE VARCHAR(16),
                   	DRUG_INDICATOR CHAR,
@@ -23,3 +23,7 @@ CREATE TABLE IF NOT EXISTS CMS_PUF.CLAIM (
                   	AVG_CHRG_AMT DOUBLE,
                   	AVG_PAYMENT DOUBLE,
                   	YR INT);
+                  	
+LOAD DATA INFILE '/var/lib/mysql-files/genent.tsv' INTO TABLE CMS_PUF.GEN_ENT;
+LOAD DATA INFILE '/var/lib/mysql-files/hcpcs.tsv' INTO TABLE CMS_PUF.HCPCS;
+LOAD DATA INFILE '/var/lib/mysql-files/claim.tsv' INTO TABLE CMS_PUF.CLAIM;
