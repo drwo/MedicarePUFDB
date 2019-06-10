@@ -187,8 +187,8 @@ The following shows that there are approximately 91 providers, identified by NPI
 
 ```{r}
 bigen <- genent %>%
-  filter(entity.code == "I") 
-dplyr::intersect(filter(bigen, gender == "M") %>% select(NPI), filter(bigen, gender == "F") %>% select(NPI))
+  filter(entity.code == "I")
+(bigen <- dplyr::intersect(filter(bigen, gender == "M") %>% select(NPI), filter(bigen, gender == "F") %>% select(NPI)))
 ```
 
 Since we do not know which gender is correct for these providers the following chunk deletes from the genent those that have both genders. Although this will affect any analysis of gender differences or entity differences the effects are likely to be very small given the very large number of providers and claims.
