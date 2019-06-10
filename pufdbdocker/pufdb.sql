@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS CMS_PUF.GEN_ENT (
 CREATE TABLE IF NOT EXISTS CMS_PUF.CLAIM (
                   	P_KEY INT PRIMARY KEY,
                   	NPI VARCHAR(24),
-                  	ZIP CHAR(10),
+                  	ZIP CHAR(5),
                   	SVC_PLACE CHAR,
                   	HCPCS_CODE VARCHAR(16),
                   	DRUG_INDICATOR CHAR,
