@@ -4,3 +4,4 @@
 .Ruserdata
 rawData/*.txt
 pufdbdocker/*.tsv
+notebooks/*.html
