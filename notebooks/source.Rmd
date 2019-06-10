@@ -10,7 +10,7 @@ output:
 
 ## Project
 
-This notebook is Part 1 of a project that constructs a relational database from datasets known as the “Medicare Fee-For-Service Provider Utilization and Payment Data, Physician and Other Supplier Public Use File” downloaded from data.cms.gov. This notebook provides the code to import the rtaw data and prepare it for uploading into a MySQL datbase. Part 2 creates and loads the database. The resulting database is intended to be used as a source of data for the statistical computing courses offered as part of the Data Science option of the DAAS degree.
+This notebook is part of a project that constructs a relational database from datasets known as the “Medicare Fee-For-Service Provider Utilization and Payment Data, Physician and Other Supplier Public Use File” downloaded from data.cms.gov. Part 1 of the notebook provides the code to import the raw data and prepare it for uploading into a MySQL database. Part 2 creates and loads the database as a service encapsulated as a Docker container. The resulting database is intended to be used as a source of data for the statistical computing courses offered as part of the Data Science option of the DAAS degree.
 
 ## The Data
 
@@ -22,7 +22,7 @@ The datasets provide information on some 6,451 HCPCS codes. Corresponding to the
 
 A small number of records in the datasets pertain to providers in foreign locations. We have chosen to remove those so that the data pertain solely to US providers. See below.
 
-# Import and Standardize the Raw Data
+# Part 1: Import and Standardize the Raw Data
 
 ## Column Names
 There are 28 variables for each 2012 and 2013 record. The following defines the variable/column names for the 28 variables for both years. The names chosen parallel the names described in CMS's documentation "Medicare-Physician-and-Other-Supplier-PUF-Methodology" See the documentation for definitions of the variables.
@@ -100,7 +100,7 @@ puf2014 <- puf2014 %>%
   mutate(year = 2014)
 ```
 
-In some cases zip is a 5 character string of the form "20003". In other cases it is a 9 or 10 character string of the form "200031234" or "20003-1234". W standarize to 5 character strings:
+In some cases zip is a 5 character string of the form "20003". In other cases it is a 9 or 10 character string of the form "200031234" or "20003-1234". W standardize to 5 character strings:
 ```{r}
 puf2012$zip <- substr(puf2012$zip, 1, 5)
 puf2013$zip <- substr(puf2013$zip, 1, 5)
@@ -230,11 +230,81 @@ hcpcs <- hcpcs %>%
   sample_n(1)
 ```
 
-# Clean Up
+## Clean Up
 We don't need puf anymore. Let's delete it to save memory and session start up time.
 
 ```{r}
 rm(puf)
 gc()
+```
+
+# Part 2: Create the Docker Image
+
+Here we create and load the database as a service encapsulated as a Docker container. The following duplicates the contents of the Dockerfile to accomplish this:
+```{sh}
+FROM drwo/mysql
+
+COPY genent.tsv /var/lib/mysql-files/genent.tsv
+COPY claim.tsv /var/lib/mysql-files/claim.tsv
+COPY hcpcs.tsv /var/lib/mysql-files/hcpcs.tsv
+
+COPY pufdb.sql /docker-entrypoint-initdb.d/pufdb.sql
+RUN chmod 640 /docker-entrypoint-initdb.d/pufdb.sql
+```
+
+After pulling the image drwo/mysql, the "tsv" files genent, claim and hcpcs  are copied into the specified directory in the container where they can be loaded into the database using the MySQL LOAD INFILE command. The code for generating the "tsv" files is as follows:
+
+```{r}
+write_tsv(claim, "./pufdbdocker/claim.tsv", col_names = FALSE)
+write_tsv(genent, "./pufdbdocker/genent.tsv", col_names = FALSE)
+write_tsv(hcpcs, "./pufdbdocker/hcpcs.tsv", col_names = FALSE)
+```
+
+Generation of the Docker image concludes by executing the the SQL statements contained in the file pufdb.sql, duplicated here. After creating the database and its tables, the data contained in the "tsv" files are loaded into their respective tables. Finally we create a special purpose user "pufdbuser" that ha privileges to select form the database tables.
+
+```{sql}
+# create the databse and tables
+CREATE DATABASE IF NOT EXISTS CMS_PUF;
+
+CREATE TABLE IF NOT EXISTS CMS_PUF.HCPCS (
+	                  HCPCS_CODE VARCHAR(16) PRIMARY KEY,
+	                  DESCRIPTION VARCHAR(256));
+	                  
+CREATE TABLE IF NOT EXISTS CMS_PUF.GEN_ENT (
+	                  NPI VARCHAR(16) PRIMARY KEY,
+	                  GENDER CHAR(2),
+	                  PROV_TYPE CHAR(1));
+
+CREATE TABLE IF NOT EXISTS CMS_PUF.CLAIM (
+                  	P_KEY INT PRIMARY KEY,
+                  	NPI VARCHAR(24),
+                  	ZIP CHAR(5),
+                  	SVC_PLACE CHAR,
+                  	HCPCS_CODE VARCHAR(16),
+                  	DRUG_INDICATOR CHAR,
+                  	SVC_COUNT INT,
+                  	BENE_COUNT INT,
+                  	BENE_DAY_SVC_COUNT INT,
+                  	AVG_ALLOWED_AMT DOUBLE,
+                  	AVG_CHRG_AMT DOUBLE,
+                  	AVG_PAYMENT DOUBLE,
+                  	YR INT);
+                  	
+# load the data
+LOAD DATA INFILE '/var/lib/mysql-files/genent.tsv' INTO TABLE CMS_PUF.GEN_ENT;
+LOAD DATA INFILE '/var/lib/mysql-files/hcpcs.tsv' INTO TABLE CMS_PUF.HCPCS;
+LOAD DATA INFILE '/var/lib/mysql-files/claim.tsv' INTO TABLE CMS_PUF.CLAIM;
+
+# create the pufdbuser user with limited privileges
+CREATE USER 'pufdbuser'@'%' IDENTIFIED BY 'pufdbuser';
+GRANT SELECT ON CMS_PUF.* TO 'pufdbuser'@'%';
+
+```
+
+The following is the code for generating the Docker image from the preceding files. This assumes that the commands are executed form within the home directory of this project and that the user is logged in the Docker hub account "drwo".
+
+```{sh}
+docker image build -t drwo/pufdb -f ./pufdbdocker/Dockerfile ./pufdbdocker
+docker push drwo/pufdb
 ```
 
