@@ -28,9 +28,10 @@ A small number of records in the datasets pertain to providers in foreign locati
 There are 28 variables for each 2012 and 2013 record. The following defines the variable/column names for the 28 variables for both years. The names chosen parallel the names described in CMS's documentation "Medicare-Physician-and-Other-Supplier-PUF-Methodology" See the documentation for definitions of the variables.
 
 ```{r}
-puf2013.colnames<-c("NPI", "org.name", "first.name", "mi", "credentials", "gender", "entity.code", "street1", "street2", "city", "zip", "state", "country", "prov.type", 
+puf2012.colnames<-c("NPI", "org.name", "first.name", "mi", "credentials", "gender", "entity.code", "street1", "street2", "city", "zip", "state", "country", "prov.type", 
                     "medicare.indicator", "svc.place", "hcpcs.code", "hcpcs.description", "drug.indicator", "svc.count", "bene.count", "bene.day.svc.count", 
                     "avg.allowed.amt", "stdev.allowed.amt", "avg.chrg.amt", "stdev.chrg.amt", "avg.payment", "stdev.payment")
+puf2013.colnames <- puf2013.colnames
 ```
 
 For 2014 CMS dropped the three standard deviations of payments and added a new payment variable: average medicare standard payment resulting in 25 variables. The following defines the variable/column names for the 25 variables for each 2014 record.
@@ -44,7 +45,8 @@ puf2014.colnames<-c("NPI", "org.name", "first.name", "mi", "credentials", "gende
 The following defines the data classes for the 28 variables in each record. Three of the variables being counts (svc.count, bene.count, bene.day.svc.count) suggest that these values should be integers. However, in an earlier version of this project we found that at least one of these variables has floating point values. Hence we have classified all of the counts as numeric rather than integer. The remaining variables are classed as character, even though some could have been classed as factor, since we will eventually load the data into a database.
 
 ```{r}
-puf2013.colclasses<-c("character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric")
+puf2012.colclasses<-c("character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric")
+puf2013.colclasses <- puf2012.colclasses
 puf2014.colclasses<-c("character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "character", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric")
 ```
 
@@ -66,7 +68,7 @@ Here we import the raw data for each year. Recall that 2012 and 2013 each have 2
 
 ```{r}
 path.prefix <- "~/Documents/Workshop/RProjects/MedicarePUFDB/rawData/"
-puf2012 <- read.puf(paste(path.prefix, "Medicare_Provider_Util_Payment_PUF_CY2012.txt", sep=""), puf2013.colnames, puf2013.colclasses)
+puf2012 <- read.puf(paste(path.prefix, "Medicare_Provider_Util_Payment_PUF_CY2012.txt", sep=""), puf2012.colnames, puf2012.colclasses)
 puf2013 <- read.puf(paste(path.prefix, "Medicare_Provider_Util_Payment_PUF_CY2013.txt", sep=""), puf2013.colnames, puf2013.colclasses)
 puf2014 <- read.puf(paste(path.prefix, "Medicare_Provider_Util_Payment_PUF_CY2014.txt", sep=""), puf2014.colnames, puf2014.colclasses)
 ```
@@ -96,6 +98,13 @@ puf2013 <- puf2013 %>%
   mutate(year = 2013)
 puf2014 <- puf2014 %>%
   mutate(year = 2014)
+```
+
+In some cases zip is a 5 character string of the form "20003". In other cases it is a 9 or 10 character string of the form "200031234" or "20003-1234". W standarize to 5 character strings:
+```{r}
+puf2012$zip <- substr(puf2012$zip, 1, 5)
+puf2013$zip <- substr(puf2013$zip, 1, 5)
+puf2014$zip <- substr(puf2014$zip, 1, 5)
 ```
 
 Now that the 3 data frames are standardized, create one master and remove the 3 year frames:
