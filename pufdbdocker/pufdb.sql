@@ -1,3 +1,4 @@
+# create the databse and tables
 CREATE DATABASE IF NOT EXISTS CMS_PUF;
 
 CREATE TABLE IF NOT EXISTS CMS_PUF.HCPCS (
@@ -24,6 +25,12 @@ CREATE TABLE IF NOT EXISTS CMS_PUF.CLAIM (
                   	AVG_PAYMENT DOUBLE,
                   	YR INT);
                   	
+# load the data
 LOAD DATA INFILE '/var/lib/mysql-files/genent.tsv' INTO TABLE CMS_PUF.GEN_ENT;
 LOAD DATA INFILE '/var/lib/mysql-files/hcpcs.tsv' INTO TABLE CMS_PUF.HCPCS;
 LOAD DATA INFILE '/var/lib/mysql-files/claim.tsv' INTO TABLE CMS_PUF.CLAIM;
+
+# create the pufdbuser user with limited privileges
+CREATE USER 'pufdbuser'@'%' IDENTIFIED BY 'pufdbuser';
+GRANT SELECT ON CMS_PUF.* TO 'pufdbuser'@'%';
+
