@@ -1,0 +1,586 @@
+---
+title: "5615 Lectures, Oct 2019"
+author: "Tom Woteki, drwo@vt.edu"
+output: html_notebook
+---
+
+# View puf Data
+```{r}
+colnames(puf)
+```
+
+```{r}
+puf
+```
+
+# Data Integrity Checks
+
+## Gender
+```{r}
+dual.gender <- puf %>%
+  select(NPI, gender) %>%
+  non.uni() %>%
+  rename(NPI = `pull(., var = 1)`)
+(dual.gender <- puf %>% filter(NPI %in% dual.gender$NPI) %>%
+  select(NPI, gender) %>%
+  distinct() %>%
+  arrange(NPI))
+```
+
+## Provider Types (Specialties)
+```{r}
+multi.prov.types <- puf %>%
+  select(NPI, prov.type) %>%
+  non.uni() %>%
+  rename(NPI = `pull(., var = 1)`)
+(multi.prov.types <- puf %>% filter(NPI %in% multi.prov.types$NPI) %>%
+  select(NPI, prov.type) %>%
+  distinct() %>%
+  arrange(NPI))
+```
+
+## Provider Credentials
+```{r}
+multi.credentials <- puf %>%
+  select(NPI, credentials) %>%
+  non.uni() %>%
+  rename(NPI = `pull(., var = 1)`)
+(multi.credentials <- puf %>% filter(NPI %in% multi.credentials$NPI) %>%
+  select(NPI, credentials) %>%
+  distinct() %>%
+  arrange(NPI))
+```
+
+
+## HCPCS Codes & Descriptions
+```{r}
+multi.descriptors <- puf %>%
+  select(hcpcs.code, hcpcs.description) %>%
+  non.uni() %>%
+  rename(hcpcs.code = `pull(., var = 1)`)
+(multi.descriptors <- puf %>% filter(hcpcs.code %in% multi.descriptors$hcpcs.code) %>%
+    select(hcpcs.code, hcpcs.description) %>%
+    distinct() %>%
+    arrange(hcpcs.code))
+```
+
+# Summary Data
+
+## Number of Claims per Provider
+```{r}
+(claims %>%
+   left_join(providers, by = "NPI") %>%
+   select(entity.code, NPI, svc.count) %>%
+   group_by(entity.code, NPI) %>%
+   summarize(n.claims = n()) %>%
+   group_by(entity.code) %>%
+   summarize(n.providers = n(), total.claims = sum(n.claims), med.claims = median(n.claims), max.claims = max(n.claims)) %>%
+   mutate(n.providers = format(n.providers, big.mark = ","), total.claims = format(total.claims, big.mark = ","),
+          med.claims = format(med.claims, big.mark = ","), max.claims = format(max.claims, big.mark = ",")))
+
+```
+
+## Payment per Provider
+```{r}
+(claims %>%
+   left_join(providers, by = "NPI") %>%
+   select(entity.code, NPI, svc.count, avg.payment) %>%
+   group_by(entity.code, NPI) %>%
+   summarise(paid = sum(svc.count * avg.payment)) %>%
+   group_by(entity.code) %>%
+   summarize(med.paid = median(paid), max.paid = max(paid)/10^6, grand.total.paid = sum(paid)/10^9) %>%
+   mutate(med.paid = paste0("$", format(med.paid, big.mark = ",")),
+          max.paid = paste0("$", format(max.paid, big.mark = ",", digits = 3)),
+          grand.total.paid = paste0("$", format(grand.total.paid, big.mark = ",", digits = 3))))
+```
+
+# Let's Explore
+```{r}
+providers %>% filter(entity.code == "I") %>% 
+  rank.claims() %>% 
+  gini.plot.shell()
+```
+
+```{r}
+claims
+```
+
+# Gini Plots
+
+## IP Payment Gini Plot
+```{r}
+providers %>% filter(entity.code == "I") %>% 
+  rank.claims() %>% 
+  gini.plotter("Concentration of Payments to Individual Providers (IPs)")
+```
+
+## OP Payment Gini Plot
+```{r}
+providers %>% filter(entity.code == "O") %>% 
+  rank.claims() %>% 
+  gini.plotter("Concentration of Payments to Organizational Providers (OPs)")
+```
+
+
+```{r}
+providers %>% filter(gender == "M") %>% 
+  rank.claims() %>% 
+  gini.plotter("Concentration of Payments to Male Providers")
+```
+
+```{r}
+providers %>% filter(gender == "F") %>% 
+  rank.claims() %>% 
+  gini.plotter("Concentration of Payments to Female Providers")
+```
+
+
+```{r}
+providers %>%
+  filter(entity.code == "I") %>%
+  rank.claims(claims %>% filter(drug.indicator == "Y" & !is.na(drug.indicator))) %>%
+  gini.plotter("Concentration of Drug Indicator Payments to IPs")
+```
+
+
+```{r}
+providers %>%
+  rank.claims.svcs(claims %>% filter(drug.indicator == "Y" & !is.na(drug.indicator))) %>%
+  gini.svcs.plotter("Concentration of Drug Indicator Services Delivered by IPs")
+```
+
+
+Which HCPCS codes are associated with drugs?
+```{r}
+(claims %>%
+  select(hcpcs.code, drug.indicator) %>%
+  filter(drug.indicator == "Y") %>%
+  select(hcpcs.code) %>%
+  distinct() %>%
+  left_join(hcpcs, by = "hcpcs.code"))
+  
+```
+
+# Total Payment Plots
+
+```{r}
+total.payment.plot.shell <- function(ranked.claims, y.scale.by) {
+ # n.p = number of providers
+  n.p <- nrow(ranked.claims) %>% format(big.mark = ",")
+  max.pay <- max(ranked.claims$total.payment)
+  ranked.claims %>%
+    arrange(desc(total.payment)) %>%
+    mutate(total.payment = total.payment, pct.rank.providers = 1.0 - pct.rank.providers) %>%
+    ggplot(aes(x = pct.rank.providers, y = total.payment)) + vt.theme +
+    scale_x_continuous(breaks=seq(0, 1.00, by=0.10), labels=percent) +
+    scale_y_continuous(breaks=seq(0, max.pay, by = y.scale.by), labels=dollar) +
+    xlab(paste("Cumulative % of", n.p, "Providers from Lowest to Highest Recipient of Total Payment")) +
+    ylab(paste0("Total Payment per Provider ($millions)")) 
+}
+```
+
+
+```{r}
+total.payment.plotter <- function(ranked.claims, title, y.scale.by) {
+  # n.p = number of providers
+  # n.p <- nrow(ranked.svcs) %>% format(big.mark = ",")
+  # max.pay <- max(ranked.claims$total.payment)
+  y.end.999 = quantile(ranked.claims$total.payment, 0.999, na.rm = T)
+  total.payment.plot.shell(ranked.claims, y.scale.by) +
+    geom_point(size = 1, color = vtm) +
+    labs(title = title) +
+    annotate("segment", x = 0.999, y = 0, xend = 0.999, yend = y.end.999, color = "red", size = 1) +
+    annotate("segment", x = 0.0, y = y.end.999, xend = 0.999, yend = y.end.999, color = "red", size = 1)
+}
+```
+
+```{r}
+ip.total.payment.plot <- function() {
+  ranked.claims <- providers %>% 
+    filter(entity.code == "I") %>%
+    rank.claims()
+  # scale payments to 10^6
+  pay.scale <- 10^6
+  med.payment <- median(ranked.claims$total.payment) %>%
+    format(big.mark = ",", digits = 5)
+  quant.999.payment <-
+    (quantile(ranked.claims$total.payment, 0.999, na.rm = T)/ pay.scale) %>%
+    format(big.mark = ",",small.mark = ".", digits = 3)
+  ranked.claims %>%
+    mutate(total.payment = total.payment / pay.scale) %>%
+    total.payment.plotter("Total Payments to Individual Providers", 10) +
+    annotate("text", x = 0.5, y = 3.0,
+             label = paste0("The median total payment was $", med.payment),
+             color = vtm, fontface = "bold") +
+    annotate("text", x = 0.5, y = 13.0,
+             label = paste0("The top 0.1% of providers received payments of at least $", quant.999.payment, " million"),
+             color = vtm, fontface = "bold")
+ }
+ip.total.payment.plot()
+```
+
+```{r}
+top.20.ip <- providers %>%
+  filter(entity.code == "I") %>%
+  rank.claims() %>%
+  select(NPI, total.payment, cumpct.total.payment) %>%
+  mutate(total.payment = paste0("$", format(total.payment, big.mark = ",", digits = 8))) %>%
+  slice(1:20) %>%
+  left_join(providers, by = "NPI") %>%
+  select(-entity.code)
+top.20.ip
+```
+
+
+```{r}
+op.total.payment.plot <- function() {
+  ranked.claims <- providers %>% 
+    filter(entity.code == "O") %>%
+    rank.claims()
+  # scale payments to 10^6
+  pay.scale <- 10^6
+  med.payment <- median(ranked.claims$total.payment) %>%
+    format(big.mark = ",", digits = 5)
+  quant.999.payment <-
+    (quantile(ranked.claims$total.payment, 0.999, na.rm = T)/ pay.scale) %>%
+    format(big.mark = ",",small.mark = ".", digits = 3)
+  ranked.claims %>%
+    mutate(total.payment = total.payment / pay.scale) %>%
+    total.payment.plotter("Total Payments to Organizational Providers", 200) +
+    annotate("text", x = 0.5, y = 50.0,
+             label = paste0("The median total payment was $", med.payment),
+             color = vtm, fontface = "bold") +
+    annotate("text", x = 0.5, y = 150.0,
+             label = paste0("The top 0.1% of providers received payments of at least $", quant.999.payment, " million"),
+             color = vtm, fontface = "bold")
+ }
+op.total.payment.plot()
+```
+
+```{r}
+top.20.op <- providers %>%
+  filter(entity.code == "O") %>%
+  rank.claims() %>%
+  select(NPI, total.payment, cumpct.total.payment) %>%
+  mutate(total.payment = paste0("$", format(total.payment, big.mark = ",", digits = 8))) %>%
+  slice(1:20) %>%
+  left_join(providers, by = "NPI") %>%
+  select(-credentials, -gender)
+top.20.op
+```
+
+```{r}
+rank.hcpcs <- function(p = providers, claims.df = claims) {
+  claims.df <- p %>% 
+    left_join(claims.df, by = "NPI") %>%
+    select(hcpcs.code:avg.payment) %>%
+    filter(!is.na(avg.payment)) %>%
+    mutate(total.payment = svc.count * avg.payment) %>%
+    group_by(hcpcs.code) %>%
+    summarize(total.payment = sum(total.payment), total.svc.count = sum(svc.count)) %>%
+    mutate(avg.payment = total.payment / total.svc.count, 
+           pct.rank.total.payment = percent_rank(total.payment), 
+           pct.rank.total.svc.count = percent_rank(total.svc.count),
+           pct.rank.avg.payment = percent_rank(avg.payment)) 
+    claims.df %>%
+      arrange(desc(total.payment)) %>%
+      mutate(total.payment.rank = 1:nrow(claims.df)) %>%
+      arrange(desc(total.svc.count)) %>%
+      mutate(total.svc.rank = 1:nrow(claims.df)) %>%
+      arrange(desc(avg.payment)) %>%
+      mutate(avg.payment.rank = 1:nrow(claims.df)) %>%
+      left_join(hcpcs, by = "hcpcs.code")
+}
+```
+
+```{r}
+total.hcpcs.payment.plot.shell <- function(prov.entity.code, y.scale.by) {
+  providers %>%
+    filter(entity.code == prov.entity.code) %>%
+    rank.hcpcs() %>%
+    arrange(desc(total.payment)) %>%
+    filter(total.payment.rank <= 25) %>%
+    ggplot(aes(x = total.payment.rank, y = total.payment / y.scale.by)) + vt.theme +
+    geom_bar(fill = vtm, stat = "identity") +
+    scale_x_continuous(breaks = seq(1, 25, by = 1)) +
+    xlab("Top 25 HCPCS Codes")
+}
+```
+
+
+
+```{r}
+ip.total.hcpcs.payment.plot <- function() {
+    total.hcpcs.payment.plot.shell("I", 10^9) +
+    ylab("Total Payment per HCPCS Code $B") +
+    labs(title = "Top 25 HCPCS Codes by Payment to Individual Providers") +
+    scale_y_continuous(breaks = seq(0, 40, by = 5))
+ }
+ip.total.hcpcs.payment.plot()
+```
+
+
+```{r}
+hcpcs.tabulator <- function(prov.entity.code) {
+  providers %>%
+    filter(entity.code == prov.entity.code) %>%
+    rank.hcpcs() %>%
+    arrange(desc(total.payment)) %>%
+    slice(1:10) %>%
+    select(hcpcs.code, hcpcs.description, total.payment) %>%
+    mutate(total.payment = paste0("$", format(total.payment, big.mark = ",")))
+}
+```
+
+```{r}
+(hcpcs.tabulator("I"))
+```
+
+
+```{r}
+op.total.hcpcs.payment.plot <- function() {
+    total.hcpcs.payment.plot.shell("O", 10^9) +
+    ylab("Total Payment per HCPCS Code $B") +
+    labs(title = "Top 25 HCPCS Codes by Payment to Organizational Providers") +
+    scale_y_continuous(breaks = seq(0, 10, by = 2))
+ }
+op.total.hcpcs.payment.plot()
+```
+
+
+```{r}
+(hcpcs.tabulator("O"))
+```
+
+```{r}
+avg.hcpcs.payment.plot.shell <- function(prov.entity.code, y.scale.by) {
+  providers %>%
+    filter(entity.code == prov.entity.code) %>%
+    rank.hcpcs() %>%
+    arrange(desc(avg.payment)) %>%
+    filter(avg.payment.rank <= 25) %>%
+    ggplot(aes(x = avg.payment.rank, y = avg.payment / y.scale.by)) + vt.theme +
+    geom_bar(fill = vtm, stat = "identity") +
+    scale_x_continuous(breaks = seq(1, 25, by = 1)) +
+    xlab("Top 25 HCPCS Codes")
+}
+```
+
+```{r}
+ip.total.hcpcs.payment.plot <- function() {
+    avg.hcpcs.payment.plot.shell("I", 10^3) +
+    ylab("Avg. Payment per HCPCS Code $000") +
+    labs(title = "Top 25 HCPCS Codes by Avg. Payment to Individual Providers") +
+    scale_y_continuous(breaks = seq(0, 30, by = 5))
+ }
+ip.total.hcpcs.payment.plot()
+```
+```{r}
+avg.hcpcs.tabulator <- function(prov.entity.code) {
+  providers %>%
+    filter(entity.code == prov.entity.code) %>%
+    rank.hcpcs() %>%
+    arrange(desc(avg.payment)) %>%
+    slice(1:10) %>%
+    select(hcpcs.code, hcpcs.description, avg.payment) %>%
+    mutate(avg.payment = paste0("$", format(avg.payment, big.mark = ",")))
+}
+```
+
+```{r}
+(avg.hcpcs.tabulator("I"))
+```
+
+
+```{r}
+op.total.hcpcs.payment.plot <- function() {
+    avg.hcpcs.payment.plot.shell("O", 10^3) +
+    ylab("Avg. Payment per HCPCS Code $000") +
+    labs(title = "Top 25 HCPCS Codes by Avg. Payment to Organizational Providers") +
+    scale_y_continuous(breaks = seq(0, 25, by = 5))
+ }
+op.total.hcpcs.payment.plot()
+```
+
+```{r}
+(avg.hcpcs.tabulator("O"))
+```
+
+
+# State Mapping
+```{r}
+library(tigris)
+states <- states() %>%
+  fortify(region = "STUSPS") %>%
+  as_tibble() %>%
+  filter(!(id %in% c("HI", "VI", "MP", "GU", "AS", "PR", "AK")))
+
+states %>%
+  ggplot(aes(x = long, y = lat, group = group)) + vt.theme +  
+  geom_polygon(color = "white", size = 0.25, fill = vto) +
+  coord_map()
+```
+
+The variable "id" in states is the state abbreviation
+```{r}
+states <- states %>%
+  mutate(state = id)
+```
+
+ 
+Filter claims so that the state variable matches that in the states data:
+```{r}
+(state.claims <- claims %>%
+  filter(state %in% states$state) %>%
+  group_by(state) %>%
+  summarize(total.payment = sum(svc.count * avg.payment), total.svc.count = sum(svc.count), total.bene.count = sum(bene.count)))
+```
+
+```{r}
+state.claims <- states %>%
+  left_join(state.claims, by = "state")
+state.claims[is.na(state.claims$total.payment), "total.payment"] <- 0
+state.claims[is.na(state.claims$total.svc.count), "total.svc.count"] <- 0
+state.claims[is.na(state.claims$total.bene.count), "total.bene.count"] <- 0
+
+```
+
+```{r}
+(state.claims %>%
+   select(state, total.payment, total.svc.count, total.bene.count) %>%
+   distinct() %>%
+   arrange(desc(total.payment)))
+```
+
+
+
+```{r payment.map}
+state.claims %>%
+  ggplot(aes(x = long, y = lat, group = group, fill = total.payment/10^9)) + vt.theme +
+  geom_polygon(color = "white", size = 0.25) +
+  scale_fill_distiller(palette="Oranges", breaks = pretty_breaks(n=10), direction = 1) +
+  guides(fill = guide_legend(reverse = TRUE, "Payment $B")) +
+  coord_map() +
+  annotate("point", x = -95.42302, y = 29.70613, color = vtm, size = 3, shape = 3) +
+  labs(title = "Total Payments by State $Billions")
+
+```
+
+
+```{r services.map}
+state.claims %>%
+  ggplot(aes(x = long, y = lat, group = group, fill = total.svc.count/10^6)) + vt.theme +
+  geom_polygon(color = "white", size = 0.25) +
+  scale_fill_distiller(palette="Oranges", breaks = pretty_breaks(n=10), direction = 1) +
+  guides(fill = guide_legend(reverse = TRUE, "Svc. Count MM")) +
+  coord_map() +
+  labs(title = "Total Service Count by State (10^6)")
+```
+
+```{r}
+state.claims %>%
+  ggplot(aes(x = total.bene.count / 10^6, y = total.payment / 10^9)) + vt.theme +
+  geom_point(color = vtm) +
+  scale_x_continuous(breaks = seq(0, 500, by = 50)) +
+  scale_y_continuous(breaks = seq(0, 50, by = 5)) +
+  xlab("Total Beneficiaries per State (10^6)") +
+  ylab("Total Payment per State $B") +
+  labs(title = "Total Payment vs Total Beneficiaries per State")
+```
+
+```{r}
+state.claims %>%
+  ggplot(aes(x = total.bene.count / 10^6, y = total.svc.count / 10^6)) + vt.theme +
+  geom_point(color = vtm) +
+  scale_x_continuous(breaks = seq(0, 500, by = 50)) +
+  scale_y_continuous(breaks = seq(0, 1500, by = 200)) +
+  xlab("Total Beneficiaries per State (10^6)") +
+  ylab("Total Service Count per State (10^6)") +
+  labs(title = "Total Svc. Count vs Total Beneficiaries per State")
+```
+
+```{r beneficiaries.map}
+state.claims %>%
+  ggplot(aes(x = long, y = lat, group = group, fill = total.bene.count/10^6)) + vt.theme +
+  geom_polygon(color = "white", size = 0.25) +
+  scale_fill_distiller(palette="Oranges", breaks = pretty_breaks(n=10), direction = 1) +
+  guides(fill = guide_legend(reverse = TRUE, "Bene. Count MM")) +
+  coord_map() 
+```
+
+
+```{r avg.payment.map}
+state.claims %>%
+  ggplot(aes(x = long, y = lat, group = group, fill = total.payment/total.svc.count)) + vt.theme +
+  geom_polygon(color = "white", size = 0.25) +
+  scale_fill_distiller(palette="Oranges", breaks = pretty_breaks(n=10), direction = 1) +
+  guides(fill = guide_legend(reverse = TRUE, "Avg. Payment $")) +
+  coord_map() 
+```
+
+
+
+
+
+
+
+# ZIP Mapping
+```{r read.shape, message = F}
+# read in the US zip shapefile and fortify it
+# this is time consuming but makes the notebook fully reproducible upon export
+us.zip.dsn <- "../rawData/cb_2015_us_zcta510_500k"
+us.zip.layer <- "cb_2015_us_zcta510_500k"
+us.zip.shape <- readOGR(dsn=us.zip.dsn, layer=us.zip.layer)
+us.zip.f <- fortify(us.zip.shape, region="ZCTA5CE10") %>%
+  as_tibble()
+# by exerimentation we found these ranges enclose the lower 48 states
+cont.us.zip <- us.zip.f %>%
+  filter((lat <= 50 & lat >= 24) & (long <= -65 & long >= -125))
+```
+
+```{r}
+cont.us.zip %>%
+  ggplot(aes(x = long, y = lat, group = group)) + vt.theme +  
+  geom_polygon(color = "white", size = 0.25, fill = vto) +
+  coord_map()
+```
+
+I don't know why the colors range from orange to maroon in this map.
+
+id is the zip code in cont.zip.us
+```{r}
+cont.us.zip <- cont.us.zip %>%
+  mutate(zip = id)
+```
+
+Filter claims so that zip codes match those in cont.us.zip:
+```{r}
+(cont.us.claims <- claims %>%
+  filter(zip %in% cont.us.zip$zip) %>%
+  group_by(zip) %>%
+  summarize(total.payment = sum(svc.count * avg.payment), total.svc.count = sum(svc.count)))
+```
+
+```{r}
+cont.us.claims <- cont.us.zip %>%
+  left_join(cont.us.claims, by = "zip")
+cont.us.claims[is.na(cont.us.claims$total.payment), "total.payment"] <- 0
+cont.us.claims[is.na(cont.us.claims$total.svc.count), "total.svc.count"] <- 0
+
+```
+
+```{r}
+(cont.us.claims %>% arrange(desc(total.payment)))
+```
+
+
+```{r}
+cont.us.claims %>%
+  ggplot(aes(x = long, y = lat, group = group, fill = total.payment/10^6)) + vt.theme +
+  geom_polygon(color = "white", size = 0.25) +
+  scale_fill_distiller(palette="Oranges", breaks = pretty_breaks(n=10), direction = 1) +
+  guides(fill = guide_legend(reverse = TRUE, "Payment")) +
+  coord_map() +
+  annotate("point", x = -95.42302, y = 29.70613, color = vtm, size = 3, shape = 3)
+```
+

@@ -1,0 +1,206 @@
+---
+title: "Medicare Provider Utilization Database"
+author: "Tom Woteki, drwo@VT.edu"
+output:
+  html_document:
+    df_print: paged
+    toc: TRUE
+  html_notebook: default
+  pdf_document: default
+---
+```{r include=FALSE} 
+knitr::opts_chunk$set(echo=FALSE)
+knitr::opts_chunk$set(include=TRUE)
+
+DBNAME <- "CMS_PUF"
+USER <- "pufdbuser"
+PASSWD <- "pufdbuser"
+HOST <- "172.23.60.139"
+pufdb.connect <- function(dbname = DBNAME, user = USER, passwd = PASSWD, host = HOST) {
+  dbConnect(RMySQL::MySQL(), dbname = dbname, username = user, password = passwd, host = host)
+}
+
+send.puf.query <- function(query = NULL) {
+  conn <- pufdb.connect()
+  q <- dbGetQuery(conn, query)
+  dbDisconnect(conn)
+  as_tibble(q)
+}
+
+```
+
+# Introduction
+
+## Project
+
+This notebook is part of a project that constructs a relational database from datasets known as the “Medicare Fee-For-Service Provider Utilization and Payment Data, Physician and Other Supplier Public Use File” downloaded from data.cms.gov. A separate notebook provides the code to import the raw data from CMS and prepare it for uploading into a MySQL database. The database is then provided as a service encapsulated in a Docker container. The resulting database is intended to be used as a source of data for the statistical computing courses offered as part of the Data Science option of the DAAS degree.
+
+## The Raw Data
+
+As noted by the Office of Information Products and Data Analytics of the Centers for Medicare and Medicaid Services (CMS), the datasets provide “information on utilization, payment (allowed amount and Medicare payment), and submitted charges by National Provider Identifier (NPI), type of provider, Healthcare Common Procedure Coding System (HCPCS) code, and place of service” for the calendar years 2012, 2013 and 2014. The data include payments to individual and organizational providers identified by NPI.
+
+# 1. Database Specifications
+
+The relational database created from the raw CMS data comprises three tables. The tables we created contain fewer fields or "variables" than are contained in the raw data. The missing fields are primarily those that provide demographic data about the providers. The demographic data are subject to a great deal of variation and errors. For example, spelling of surnames can vary, presumably due to errors or, in some cases, apparently due to changes in marital status. Also, the office location of a provider may have changed over the years. The specifications given below can be compared to CMS's documentation to see which fields were omitted from the raw data.
+
+## 1.1 CLAIM Table
+Each record in the CLAIM table is a summary of a request for reimbursement by a healthcare provider, specified by their NPI, for services delivered, specified by HCPCS code. There are over 27 million records in this table.
+
+The following  shows the correspondence between the fields in the CLAIM table and their counterparts in the CMS methodology document: 
+
+|Table Field|CMS Name|CMS Description|
+|:----------|:---------------|:----------------------------------------|
+|NPI|npi|National Provider Identifier (NPI) for the Performing Provider on the Claim|
+|ZIP| nppes_provider_zip|The provider’s zip code, as reported in NPPES|
+|SVC_PLACE|place_of_Service|Identifies whether the place of service submitted on the claims is a facility (value of ‘F’) or non-facility (value of ‘O’). Non-facility is generally an office setting; however other entities are included in non-facility.|
+|HCPCS_CODE|hcpcs_code|HCPCS code for the specific medical service furnished by the provider.|
+|DRUG_INDICATOR|hcpcs_drug_indicator|Identifies whether the HCPCS code for the specific service furnished by the provider is a HCPCS listed on the Medicare Part B Drug Average Sales Price (ASP) File|
+|SVC_COUNT|line_srvc_cnt|Number of services provided; note that the metrics used to count the number provided can vary from service to service|
+|BENE_COUNT|bene_unique_cnt|Number of distinct Medicare beneficiaries receiving the service|
+|BENE_DAY_SVC_COUNT|bene_day_srvc_cnt|Number of distinct Medicare beneficiary/per day services. Since a given beneficiary may receive multiple services of the same type (e.g., single vs. multiple cardiac stents) on a single day, this metric removes double-counting from the line service count to identify whether a unique service occurred|
+|AVG_ALLOWED_AMT|average_Medicare_allowed_amt|Average of the Medicare allowed amount for the service; this figure is the sum of the amount Medicare pays, the deductible and coinsurance amounts that the beneficiary is responsible for paying, and any amounts that a third party is responsible for paying|
+|AVG_CHRG_AMT|average_submitted_chrg_amt|Average of the charges that the provider submitted for the service|
+|AVG_PAYMENT|average_Medicare_payment_amt|Average amount that Medicare paid after deductible and coinsurance amounts have been deducted for the line item service|
+
+In addition to the fields listed above the table has 2 other fields: P_KEY that serves as a primary key and YR that is the year associated with the claim. P_KEY is derived from the combination of NPI, HCPCS_CODE, SVC_PLACE and YR. These 4 fields in combination uniquely identify each record.
+
+The following is an extract from the table. 
+
+```{r}
+send.puf.query("SELECT * FROM CLAIM LIMIT 10;")
+```
+
+## 1.2 GEN_ENT Table
+
+Each record in this table pertains to a unique provider. Besides the NPI of the provider it gives their gender and whether they are an individual or an organizational provider. There are over 1 million providers. 
+
+Organizational providers do not have gender, indicated by a value of NA. The NPI field can be joined to the NPI field in the CLAIM table to analyze differences between genders and between provider types.
+
+|Table Field|CMS Name|CMS Description|
+|:----------|:---------------|:----------------------------------------|
+|NPI|npi|National Provider Identifier (NPI) for the Performing Provider on the Claim|
+|GENDER|nppes_provider_gender|When the provider is registered in NPPES as an individual (entity type code=’I’), this is the provider’s gender. When the provider is registered as an organization (entity type code = ‘O’), this will be blank|
+|PROV_TYPE|nppes_entity_code|Type of entity reported in NPPES. An entity code of ‘I’ identifies providers registered as individuals and an entity type code of ‘O’ identifies providers registered as organizations|
+
+An extract:
+
+```{r}
+send.puf.query("SELECT * FROM GEN_ENT LIMIT 10;")
+```
+
+## 1.3 HCPCS Table
+
+Each record in this table relates a HCPCS code to a description of the service it corresponds to. There are over 6 thousand HCPCS codes in the dataset. 
+
+The HCPCS field can be joined to the HCPCS field in the CLAIM table to analyze differences among services rendered.
+
+|Table Field|CMS Name|CMS Description|
+|:----------|:---------------|:----------------------------------------|
+|HCPCS|hcpcs_code|HCPCS code for the specific medical service furnished by the provider|
+|DESCRIPTION|hcpcs_description|Description of the HCPCS code for the specific medical service furnished by the provider. HCPCS descriptions associated with CPT codes are consumer friendly descriptions provided by the AMA. All other descriptions are CMS Level II descriptions provided in long form. Due to variable length restrictions, the CMS Level II descriptions have been truncated to 256 bytes. As a result, the same HCPCS description can be associated with more than one HCPCS code. For complete CMS Level II descriptions, visit http://www.cms.gov/Medicare/Coding/HCPCSReleaseCodeSets/Alpha-Numeric- HCPCS.html.|
+
+An extract:
+
+```{r}
+send.puf.query("SELECT * FROM HCPCS LIMIT 10;")
+```
+
+# 2. Connecting to the Database
+
+The database is called CMS_PUF and is hosted in a Docker container on a server in the VA Tech on-prem cloud. Users can connect to the database using the following credentials:
+
+|Key|Value|
+|:-------|:-------|
+|Database|CMS_PUF|
+|Host|172.23.60.139|
+|User|pufdbuser|
+|Password|pufdbuser|
+|Port|3306|
+
+The following chunk illustrates making a connection using the RMySQL::MySQL() driver and retrieving the first 10 records of the CLAIM table as seen above. (The assignment of the result of dbDisconnect to "conn" merely prevents printing the result of the function.)
+
+```{r echo = TRUE}
+  conn <- dbConnect(RMySQL::MySQL(), dbname = "CMS_PUF", username = "pufdbuser", password = "pufdbuser", host = "172.23.60.139")
+  q <- dbGetQuery(conn, "SELECT * FROM CLAIM LIMIT 10;")
+  conn <- dbDisconnect(conn)
+  as_tibble(q)
+```
+
+
+# 3. Exploring the Claims Data
+The Medicare Provider Utilization data are a rich source of data for exploring claims for reimbursement by providers and payments to them. This section shows an example exploratory plot. It concludes with a few ideas for further exploration.
+
+## 3.1 Exploring the Inequality in Distribution of Payments
+```{r}
+iclaim <- send.puf.query("SELECT NPI, SVC_COUNT, AVG_PAYMENT FROM CLAIM;") %>%
+  rename(svc.count = SVC_COUNT, avg.payment = AVG_PAYMENT) %>%
+  select(NPI, svc.count, avg.payment)
+
+igenent <- send.puf.query("SELECT NPI, PROV_TYPE FROM GEN_ENT;") %>%
+  rename(entity.code = PROV_TYPE) %>%
+  select(NPI, entity.code)
+```
+
+```{r}
+iclaim <- iclaim %>%
+  left_join(igenent, by = "NPI") %>%
+  filter(entity.code == "I") %>%
+  select(NPI, svc.count, avg.payment) %>%
+  mutate(total.payment = svc.count * avg.payment) %>%
+  group_by(NPI) %>% summarise(svc.count=sum(svc.count), total.payment=sum(total.payment)) %>%
+  mutate(pct.rank.svc.count=percent_rank(svc.count), pct.rank.total.payment=percent_rank(total.payment)) %>%
+  arrange(desc(pct.rank.total.payment))
+
+iclaim <- iclaim %>%
+  mutate(rank = 1:nrow(iclaim)) %>%
+  mutate(pct.rank.providers=percent_rank(rank), cumpct.total.payment=cumsum(total.payment/sum(total.payment)))
+```
+
+The following example plot shows how unequal, or concentrated, total payments to individual providers were during the years 2012 to 2014. The Gini coefficient for these total payments is `r ineq(iclaim$total.payment) %>% format(digits = 3)`. The Gini coefficient is a measure of the inequality of the distribution of resources such as payments or wealth. For comparison, the Gini coefficient for the distribution of family income in the U.S. in 2014 was 0.48 according to the U.S. Census Bureau. Thus the distribution of payments to IPs is much more concentrated than that of U.S. family income.
+
+```{r}
+vto <- "#CF4420"
+vtlo <- "#ff9948"
+vtm <- "#630031"
+vt.theme <- theme_grey() +
+  theme(text = element_text(color = vtm),
+        axis.line = element_line(color = vtm),
+        panel.background = element_rect(fill = vtlo, color = vto),
+        axis.title = element_text(size = 10, face = "bold"),
+        plot.title = element_text(face = "bold"))
+```
+
+```{r}
+nip <- nrow(iclaim) %>% format(big.mark = ",")
+total.pay <- (sum(iclaim$total.payment)/10^9) %>% format(digits = 4, bigmark = ",", small.mark = ".")
+y.end.10 <- quantile(iclaim$cumpct.total.payment, 0.10)
+y.end.50 <- quantile(iclaim$cumpct.total.payment, 0.50)
+
+iclaim %>%
+  ggplot(aes(x=pct.rank.providers, y=cumpct.total.payment)) + vt.theme +
+  geom_point(size=1, color = vtm) +
+  scale_x_continuous(breaks=seq(0, 1.00, by=0.10), labels=percent) +
+  scale_y_continuous(breaks=seq(0, 1.00, by=0.10), labels=percent) +
+  xlab(paste("Cumulative % of",nip, "Individual Providers from Highest to Lowest Recipient of Total Payment")) +
+  ylab(paste0("Cumulative % Share of Payments Totaling $", total.pay, " Billion")) +
+  labs(title = "Concentration of Payments to Individual Providers (IPs)") +
+  annotate("segment", x=0.0, xend=1.0, y=0.0, yend=1.0, color = "green", size=1) +
+  annotate("segment", x=0.10, y=0.0, xend=0.10, yend=y.end.10, color = vtm, size=1) +
+  annotate("segment", x=0.0, y=y.end.10, xend=0.10, yend=y.end.10, color = vtm, size=1) +
+  annotate("segment", x=0.50, y=0.0, xend=0.50, yend=y.end.50, color = vtm, size=1) +
+  annotate("segment", x=0.0, y=y.end.50, xend=0.50, yend=y.end.50, color = vtm, size=1) +
+  annotate("text", x = 0.25, y = 0.97, label = "~95% of Payments Went to 50% of IPs", color = vtm, size = 4, fontface = "bold") +
+  annotate("text", x = 0.25, y = 0.50, label = "~55% of Payments \n Went to 10% of IPs", color = vtm, size = 4, fontface = "bold")
+```
+
+## 3.2 Ideas for the Student Reader
+
+* Develop a similar plot for the distribution of payments to organizational providers. 
+* Has the concentration of payments changed noticeably from year to year?
+* Develop a plot whose x-axis shows the cumulative percentage of the number of IPs ranked from lowest to highest recipient of total payment and whose y-axis is the total payment per provider. What does this tell you about the how different the payments to the top 0.1% recipients of payments are from the rest of providers as compared to the plot shown above?
+* Develop a heat map that illustrates how total payments vary by zip code.
+* How do average allowed amount (AVG_ALLOWED_AMT), average charge amount (AVG_CHRG_AMT) and average payment (AVG_PAYMENT) vary among themselves and across zip codes?
+* What services, by HCPCS code, are most common and how do amounts charged and paid for these vary by zip code or gender?
+* Etc...
+
+

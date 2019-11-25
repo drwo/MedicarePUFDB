@@ -1,0 +1,76 @@
+---
+title: "Functions in R"
+author: "Dr. Wo"
+date: "10/31/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## What is a Function?
+A function is an object in R that takes objects as inputs, sepcified as arguements to the function, excutes some code and either returns some R object as output or has some side effect.
+
+The following very simple function has 1 input, expected to be a number, adds 10 to the number and returns the result as its output:
+```{r add.10}
+add.10 <- function(x) {
+  x + 10
+} 
+```
+
+```{r}
+add.10(-1)
+
+zed <- -1
+add.10(zed)
+```
+
+### Default Arguements
+Values of some arguements can be given default values
+
+```{r}
+adder <- function(x, summand = 10) {
+  x + summand
+}
+```
+
+```{r}
+adder(-1)
+
+zed <- -1
+adder(zed)
+```
+Default values can be overriden. 
+```{r}
+adder(99, summand = -99)
+
+adder(99, -99)
+```
+
+
+## "Pipe" Operator
+The binary "pipe" operator %>% has 2 operands. The left hand operand is any object, the right operand is a function. The operator inputs its left hand operand as the first arguement to the function that is its right operand
+```{r}
+100 %>% adder()
+
+zed <- 100
+zed %>% adder(summand = pi)
+```
+
+## Dataframes & Tibbles
+A dataframe is just like a spreadsheet. It consist of rows, or cases, each of which is a vector of values, or observations. A "tibble" is a firendlier version of a dataframe.
+```{r}
+df <- tibble(v1 = c(1,2), v2 = c("foo", "bar"))
+df
+```
+
+## Group By
+The group_by function is very useful for summarizing data by groups
+```{r}
+foo <- tibble(NPI = c("100", "100", "101"), svc.count = c(10, 50, 20))
+foo %>% group_by(NPI) %>%
+  summarize(total.svc.count = sum(svc.count))
+```
+
+

@@ -1,0 +1,253 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Exploring the Claims Data
+The Medicare Provider Utilization data are a rich source of data for exploring claims for reimbursement by providers and payments to them. This section shows an example exploratory plot. It concludes with a few ideas for further exploration.
+
+## 3.1 Exploring the Inequality in Distribution of Payments
+```{r}
+iclaim <- send.puf.query("SELECT NPI, SVC_COUNT, AVG_PAYMENT FROM CLAIM;") %>%
+  rename(svc.count = SVC_COUNT, avg.payment = AVG_PAYMENT) %>%
+  select(NPI, svc.count, avg.payment)
+
+igenent <- send.puf.query("SELECT NPI, PROV_TYPE FROM GEN_ENT;") %>%
+  rename(entity.code = PROV_TYPE) %>%
+  select(NPI, entity.code)
+```
+
+```{r}
+iclaim <- iclaim %>%
+  left_join(igenent, by = "NPI") %>%
+  filter(entity.code == "I") %>%
+  select(NPI, svc.count, avg.payment) %>%
+  mutate(total.payment = svc.count * avg.payment) %>%
+  group_by(NPI) %>% summarise(svc.count=sum(svc.count), total.payment=sum(total.payment)) %>%
+  mutate(pct.rank.svc.count=percent_rank(svc.count), pct.rank.total.payment=percent_rank(total.payment)) %>%
+  arrange(desc(pct.rank.total.payment))
+
+iclaim <- iclaim %>%
+  mutate(rank = 1:nrow(iclaim)) %>%
+  mutate(pct.rank.providers=percent_rank(rank), cumpct.total.payment=cumsum(total.payment/sum(total.payment)))
+```
+
+```{r}
+x <- claims %>%
+  select(year, NPI, svc.count, avg.payment) %>%
+  mutate(total.pay = svc.count * avg.payment) %>%
+  select(year, NPI, total.pay) %>%
+  left_join(providers, by = "NPI") %>%
+  select(year, total.pay, entity.code) %>%
+  group_by(entity.code, year) %>%
+  summarize(total.pay = sum(total.pay)/10^9)
+ 
+x <- x %>%
+  ungroup() %>%
+  add_row(entity.code = "I", year = "All", total.pay = sum(x[1:6, "total.pay"]), .after = 6) %>%
+  add_row(entity.code = "O", year = "All", total.pay = sum(x[7:12, "total.pay"])) %>%
+  add_row(entity.code = "All", year = "All", total.pay = sum(x$total.pay)) %>%
+  mutate(total.pay = format(total.pay, big.mark = ",", small.mark = ".", digits = 3))
+x
+
+
+```
+
+```{r}
+x <- claims %>%
+  select(year, svc.count, avg.payment) %>%
+  mutate(total.pay = svc.count * avg.payment) %>%
+  group_by(year) %>%
+  summarize(total.pay = sum(total.pay)/10^9) 
+
+(x %>% add_row(year = "All", total.pay = sum(x$total.pay)) %>%
+    mutate(total.pay = format(total.pay, big.mark = ",", small.mark = ".", digits = 3)))
+```
+
+```{r vt.theme}
+vto <- "#CF4420"
+vtlo <- "#ff9948"
+vtm <- "#630031"
+vt.theme <- theme_grey() +
+  theme(text = element_text(color = vtm),
+        axis.line = element_line(color = vtm),
+        panel.background = element_rect(fill = vtlo, color = vto),
+        axis.title = element_text(size = 10, face = "bold"),
+        plot.title = element_text(face = "bold"))
+```
+
+```{r rank.claims}
+rank.claims <- function(p = providers, claims.df = claims) {
+  claims.df <- p %>% 
+    left_join(claims.df, by = "NPI") %>%
+    select(NPI, svc.count, avg.payment) %>%
+    filter(!is.na(avg.payment)) %>%
+    mutate(total.payment = svc.count * avg.payment) %>%
+    group_by(NPI) %>% summarise(total.payment = sum(total.payment)) %>%
+    mutate(pct.rank.total.payment = percent_rank(total.payment)) %>%
+    arrange(desc(pct.rank.total.payment))
+  claims.df %>%
+    mutate(rank = 1:nrow(claims.df)) %>%
+    mutate(pct.rank.providers = percent_rank(rank), cumpct.total.payment = cumsum(total.payment/sum(total.payment)))
+}
+```
+
+```{r}
+rank.claims.svcs <- function(p = providers, claims.df = claims) {
+  claims.df <- p %>% 
+    left_join(claims.df, by = "NPI") %>%
+    select(NPI, svc.count) %>%
+    filter(!is.na(svc.count)) %>%
+    group_by(NPI) %>% summarise(total.svc.count = sum(svc.count)) %>%
+    mutate(pct.rank.svc.count = percent_rank(total.svc.count)) %>%
+    arrange(desc(pct.rank.svc.count))
+  claims.df %>%
+    mutate(rank = 1:nrow(claims.df)) %>%
+    mutate(pct.rank.providers = percent_rank(rank), cumpct.total.svc.count = cumsum(total.svc.count/sum(total.svc.count)))
+}
+```
+
+```{r}
+(x <- providers %>%
+  left_join(claims %>% filter(drug.indicator == "Y" & !is.na(drug.indicator)), by = "NPI") %>%
+   select(NPI, svc.count, avg.payment) %>%
+   filter(!is.na(avg.payment)) %>%
+   mutate(total.payment = svc.count * avg.payment))
+```
+
+```{r gini.plot.shell}
+gini.plot.shell <- function(ranked.claims) {
+  # n.p = number of providers
+  n.p <- nrow(ranked.claims) %>% format(big.mark = ",")
+  total.pay <- (sum(ranked.claims$total.payment)/10^9) %>% format(digits = 4, bigmark = ",", small.mark = ".")
+  ranked.claims %>%
+    ggplot(aes(x=pct.rank.providers, y=cumpct.total.payment)) + vt.theme +
+    # geom_point(size=1, color = vtm) +
+    scale_x_continuous(breaks=seq(0, 1.00, by=0.10), labels=percent) +
+    scale_y_continuous(breaks=seq(0, 1.00, by=0.10), labels=percent) +
+    xlab(paste("Cumulative % of", n.p, "Providers from Highest to Lowest Recipient of Total Payment")) +
+    ylab(paste0("Cumulative % Share of Payments Totaling $", total.pay, " Billion")) +
+    annotate("segment", x=0.0, xend=1.0, y=0.0, yend=1.0, color = "green", size=1) +
+    annotate("segment", x=0.0, xend=1.0, y=0.0, yend=1.0, color = "green", size=1)
+}
+```
+
+```{r}
+providers %>% filter(entity.code == "I") %>% rank.claims() %>% gini.plot.shell()
+```
+
+```{r gini.svcs.plot.shell}
+gini.svcs.plot.shell <- function(ranked.svcs) {
+  # n.p = number of providers
+  n.p <- nrow(ranked.svcs) %>% format(big.mark = ",")
+  total.svcs <- (sum(ranked.svcs$total.svc.count)/10^9) %>% format(digits = 4, bigmark = ",", small.mark = ".")
+  ranked.svcs %>%
+    ggplot(aes(x=pct.rank.providers, y=cumpct.total.svc.count)) + vt.theme +
+    # geom_point(size=1, color = vtm) +
+    scale_x_continuous(breaks=seq(0, 1.00, by=0.10), labels=percent) +
+    scale_y_continuous(breaks=seq(0, 1.00, by=0.10), labels=percent) +
+    xlab(paste("Cumulative % of", n.p, "Providers from Highest to Lowest Number of Services")) +
+    ylab(paste("Cumulative % Share of",  total.svcs, "Billion Services Claimed")) +
+    annotate("segment", x=0.0, xend=1.0, y=0.0, yend=1.0, color = "green", size=1) +
+    annotate("segment", x=0.0, xend=1.0, y=0.0, yend=1.0, color = "green", size=1)
+}
+```
+
+```{r}
+gini.plotter <- function(ranked.claims, title) {
+  y.end.10 <- quantile(ranked.claims$cumpct.total.payment, 0.10, na.rm = T)
+  y.end.50 <- quantile(ranked.claims$cumpct.total.payment, 0.50, na.rm = T)
+  txt.end.10 <- format(100 * y.end.10, digits = 2)
+  txt.end.50 <- format(100 * y.end.50, digits = 2)
+  gini <- ranked.claims %>%
+    select(total.payment) %>%
+    pull() %>%
+    ineq() %>% format(digits = 2)
+  gini.plot.shell(ranked.claims) +
+    labs(title = title) +
+    geom_point(size=1, color = vtm) +
+    annotate("segment", x=0.10, y=0.0, xend=0.10, yend=y.end.10, color = "red", size=1) +
+    annotate("segment", x=0.0, y=y.end.10, xend=0.10, yend=y.end.10, color = "red", size=1) +
+    annotate("segment", x=0.50, y=0.0, xend=0.50, yend=y.end.50, color = "red", size=1) +
+    annotate("segment", x=0.0, y=y.end.50, xend=0.50, yend=y.end.50, color = "red", size=1) +
+    annotate("text", x = 0.25, y = y.end.10 - .05, 
+             label = paste(paste0("~", txt.end.10, "%"), "of Payments \n Went to 10% of Providers"),
+             color = vtm, size = 3, fontface = "bold") +
+    annotate("text", x = 0.65, y = y.end.50 - .05, 
+             label = paste(paste0("~", txt.end.50, "%"), "of Payments \n Went to 50% of Providers"),
+             color = vtm, size = 3, fontface = "bold") +
+    annotate("text", x = 0.70, y = 0.50,
+             label = paste("Gini Index =", gini),
+             color = vtm, size = 3, fontface = "bold")
+}
+```
+
+```{r}
+providers %>% filter(entity.code == "I") %>% rank.claims() %>% gini.plotter("Concentration of Payments to Individual Providers (IPs)")
+```
+
+```{r}
+gini.svcs.plotter <- function(ranked.svcs, title) {
+  y.end.10 <- quantile(ranked.svcs$cumpct.total.svc.count, 0.10, na.rm = T)
+  y.end.50 <- quantile(ranked.svcs$cumpct.total.svc.count, 0.50, na.rm = T)
+  txt.end.10 <- format(100 * y.end.10, digits = 2)
+  txt.end.50 <- format(100 * y.end.50, digits = 2)
+  gini.svcs.plot.shell(ranked.svcs) +
+    labs(title = title) +
+    geom_point(size=1, color = vtm) +
+    annotate("segment", x=0.10, y=0.0, xend=0.10, yend=y.end.10, color = "red", size=1) +
+    annotate("segment", x=0.0, y=y.end.10, xend=0.10, yend=y.end.10, color = "red", size=1) +
+    annotate("segment", x=0.50, y=0.0, xend=0.50, yend=y.end.50, color = "red", size=1) +
+    annotate("segment", x=0.0, y=y.end.50, xend=0.50, yend=y.end.50, color = "red", size=1) +
+    annotate("text", x = 0.25, y = y.end.10 - .05, 
+             label = paste(paste0("~", txt.end.10, "%"), "of Services \n Delivered by 10% of Providers"),
+             color = vtm, size = 3, fontface = "bold") +
+    annotate("text", x = 0.65, y = y.end.50 - .05, 
+             label = paste(paste0("~", txt.end.50, "%"), "Services \n Delivered by 50% of Providers"),
+             color = vtm, size = 3, fontface = "bold")
+}
+```
+
+```{r}
+providers %>% filter(entity.code == "I") %>% rank.claims.svcs() %>% gini.svcs.plotter("Concentration of Services Delivered by Individual Providers")
+```
+
+
+The following example plot shows how unequal, or concentrated, total payments to individual providers were during the years 2012 to 2014. The Gini coefficient for these total payments is `r ineq(iclaim$total.payment) %>% format(digits = 3)`. The Gini coefficient is a measure of the inequality of the distribution of resources such as payments or wealth. For comparison, the Gini coefficient for the distribution of family income in the U.S. in 2014 was 0.48 according to the U.S. Census Bureau. Thus the distribution of payments to IPs is much more concentrated than that of U.S. family income.
+
+```{r}
+iclaim <- claims %>%
+  # filter(year %in% c("2012", "2013", "2014", "2015", "2016")) %>%
+  rank.claims()
+nip <- nrow(iclaim) %>% format(big.mark = ",")
+total.pay <- (sum(iclaim$total.payment)/10^9) %>% format(digits = 4, bigmark = ",", small.mark = ".")
+y.end.10 <- quantile(iclaim$cumpct.total.payment, 0.10)
+y.end.50 <- quantile(iclaim$cumpct.total.payment, 0.50)
+
+iclaim %>%
+  ggplot(aes(x=pct.rank.providers, y=cumpct.total.payment)) + vt.theme +
+  geom_point(size=1, color = vtm) +
+  scale_x_continuous(breaks=seq(0, 1.00, by=0.10), labels=percent) +
+  scale_y_continuous(breaks=seq(0, 1.00, by=0.10), labels=percent) +
+  xlab(paste("Cumulative % of",nip, "Individual Providers from Highest to Lowest Recipient of Total Payment")) +
+  ylab(paste0("Cumulative % Share of Payments Totaling $", total.pay, " Billion")) +
+  labs(title = "Concentration of Payments to Individual Providers (IPs)") +
+  annotate("segment", x=0.0, xend=1.0, y=0.0, yend=1.0, color = "green", size=1) +
+  annotate("segment", x=0.10, y=0.0, xend=0.10, yend=y.end.10, color = vtm, size=1) +
+  annotate("segment", x=0.0, y=y.end.10, xend=0.10, yend=y.end.10, color = vtm, size=1) +
+  annotate("segment", x=0.50, y=0.0, xend=0.50, yend=y.end.50, color = vtm, size=1) +
+  annotate("segment", x=0.0, y=y.end.50, xend=0.50, yend=y.end.50, color = vtm, size=1) +
+  annotate("text", x = 0.25, y = 0.97, label = "~95% of Payments Went to 50% of IPs", color = vtm, size = 4, fontface = "bold") +
+  annotate("text", x = 0.25, y = 0.50, label = "~55% of Payments \n Went to 10% of IPs", color = vtm, size = 4, fontface = "bold")
+```
+
+
+## 3.2 Ideas for the Student Reader
+
+* Develop a similar plot for the distribution of payments to organizational providers. 
+* Has the concentration of payments changed noticeably from year to year?
+* Develop a plot whose x-axis shows the cumulative percentage of the number of IPs ranked from lowest to highest recipient of total payment and whose y-axis is the total payment per provider. What does this tell you about the how different the payments to the top 0.1% recipients of payments are from the rest of providers as compared to the plot shown above?
+* Develop a heat map that illustrates how total payments vary by zip code.
+* How do average allowed amount (AVG_ALLOWED_AMT), average charge amount (AVG_CHRG_AMT) and average payment (AVG_PAYMENT) vary among themselves and across zip codes?
+* What services, by HCPCS code, are most common and how do amounts charged and paid for these vary by zip code or gender?
+* Etc...
+

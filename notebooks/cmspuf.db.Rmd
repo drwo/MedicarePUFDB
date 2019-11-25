@@ -1,6 +1,8 @@
 ---
 title: "R Notebook"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 ```{r}
@@ -8,6 +10,13 @@ DBNAME <- "CMS_PUF"
 USER <- "mysqladmin"
 PASSWD <- "Java!Warrior"
 HOST <- "192.168.168.47"
+```
+```{r}
+claim
+```
+
+```{r}
+
 ```
 
 ```{r}
@@ -74,9 +83,10 @@ create.claim.tbl <- function() {
 ```
 
 ```{r}
-create.pufdb()
-create.hcpcs.tbl()
-create.genent.tbl()
-create.claim.tbl()
+# create.pufdb()
+# create.hcpcs.tbl()
+# create.genent.tbl()
+# create.claim.tbl()
 ```
+
 

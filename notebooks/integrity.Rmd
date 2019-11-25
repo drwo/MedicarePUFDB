@@ -1,0 +1,279 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Data Integrity
+This section explores the data to identify possible inconsistencies or errors in the data such as a provider, identified by NPI, who is coded as an individual provider on some claims and an organizational provider on another.
+
+```{r non.uni}
+# this utility function is used below. It expects a tibble of 2 columns, does a group_by on the first column and then counts with the n() function
+non.uni <- function(df) {
+  df %>% 
+    distinct() %>%
+    group_by(pull(., var = 1)) %>%
+    summarise(n = n()) %>%
+    filter(n > 1) 
+}
+```
+
+# Provider Type
+This section checks to see if there are any providers that are coded as both an individual (entity.code == "I") and organizational provider (entity.code == "O"). If there are none the following chunk should return the value 0.
+```{r}
+puf %>%
+  select(NPI, entity.code) %>%
+  non.uni() %>%
+  nrow()
+```
+
+In addition we check to see that there are no organizational providers that have a gender and that there are no individual providers without a gender. Both of the following chunks should return 0.
+```{r}
+puf %>% filter(entity.code == "O" & gender %in% c("M", "F")) %>% nrow()
+```
+
+```{r}
+puf %>% filter(entity.code == "I" & !(gender %in% c("M", "F"))) %>% nrow()
+```
+
+Now calculate the number of each type of provider:
+
+```{r}
+count.providers <- function(code, p = puf) {
+  p %>%
+    select(NPI, entity.code) %>%
+    filter(entity.code == code) %>%
+    distinct() %>%
+    nrow()
+}
+n.iproviders <- count.providers("I")
+n.oproviders <- count.providers("O")
+n.providers <- puf %>%
+  select(NPI) %>%
+  distinct() %>%
+  nrow()
+n.providers == n.iproviders + n.oproviders
+```
+
+There are `r format(n.iproviders, big.mark = ",")` individual providers, `r format(n.oproviders, big.mark = ",")` for a total of `r format(n.providers, big.mark = ",")` unique providers.
+
+## Gender
+This section checks to see if there are any individual providers (entity.code = "I") who are coded as both male and female. The following chunk calculates the number of providers that are coded both ways. If there are none the calculation should return 0.
+```{r}
+(n.bi <- puf %>%
+  select(NPI, gender) %>%
+  non.uni() %>%
+  nrow())
+```
+
+There are `r n.bi` providers who are coded both ways. The following table shows the gender for each of the provider's whose gender coding varies. It shows the coding for each of the years the NPI appears in the data.
+```{r}
+dual.gender <- puf %>%
+  select(NPI, gender) %>%
+  non.uni() %>%
+  rename(NPI = `pull(., var = 1)`)
+(dual.gender <- puf %>% filter(NPI %in% dual.gender$NPI) %>%
+  select(NPI, year, org.name, first.name, gender) %>%
+  distinct() %>%
+  arrange(NPI))
+```
+
+According to CMS' methodology report, an individual healthcare provider's demogrqphics, including gender, are updated periodically. For the 2017 reporting year the data were updated at the end of calendar year 2018. The following chunk standardizes the gender coding for these providers as of the 2017 reporting year.
+```{r}
+dual.gender <- dual.gender %>%
+  filter(year == "2017")
+for (npi in dual.gender$NPI) {
+  puf[puf$NPI == npi, "gender"] <- dual.gender[dual.gender$NPI == npi, "gender"]
+}
+```
+
+
+
+
+# Create Tables
+This section partitions the data into three subsets that will eventually be used to populate a database. The three are:
+
+    * claim: a table of all claims for services rendered and reimbursement by NPI, HCPCS code and zip code.
+    * hcpcs: a table of the HCPCS codes and their descriptors whose primary key is the HCPCS code.
+    * genent: a table providing gender and entity code (individual vs. organizational provider) for providers indexed by NPI. There are some gender anomolies in the data that are discussed below.
+    
+## Claim Table
+In the Claim table each record represents a submission of a claim for reimbursement for services rendered by a provider and the amount paid by CMS.
+
+```{r}
+claim <- puf %>% 
+  select(NPI, zip, svc.place, hcpcs.code, drug.indicator, svc.count, bene.count, bene.day.svc.count, avg.allowed.amt, avg.chrg.amt, avg.payment, year)
+
+```
+
+The following demonstrates that the rows of claim are distinct. Equivalently, all of the variables combined are a compound primary key for the table.
+
+```{r}
+nrow(distinct(claim)) == nrow(claim)
+```
+
+By trial and error we searched for a smaller set of variables that in combination can be a primary key. The following demonstrates a set of four variables that suffice. 
+
+```{r}
+key <- claim %>%
+  select(NPI, svc.place, hcpcs.code, year) %>%
+  distinct()
+nrow(key) == nrow(claim)
+rm(key)
+```
+
+Surprising to me is that "svc.place" is a key. According to CMS documentation, place of service "Identifies whether the place of service submitted on the claims is a facility (value of ‘F’) or non-facility (value of ‘O’). Non-facility is generally an office setting; however other entities are included in non-facility". Contrast this with, for example the combination "NPI, zip, svc.count, hcpcs.code, year" that do not form a primary key.
+
+Now arrange the table according to the key we just identified:
+```{r}
+claim <- claim %>%
+  arrange(NPI, svc.place, hcpcs.code, year)
+```
+
+Add a column to be a convenient primary key:
+```{r}
+claim <- claim %>%
+  add_column(p.key = 1:nrow(claim), .before = "NPI")
+claim
+```
+
+## Gender-Entity Table
+This section builds a table that gender and entity code information by NPI. This table can then be joined to the Claim table, via NPI, to explore patterns in claims and reimbursement by gender end entity code.
+
+An initial version of the "genent" table:
+```{r}
+genent <- puf %>%
+  select(NPI, gender, entity.code) %>%
+  distinct()
+genent
+```
+
+The following shows that there are approximately 91 providers, identified by NPI, who are classified as both male and female. This can only occur with individual providers (entity.code == "I"). This is highly likely due to data entry errors. 
+
+```{r}
+bigen <- genent %>%
+  filter(entity.code == "I")
+(bigen <- dplyr::intersect(filter(bigen, gender == "M") %>% select(NPI), filter(bigen, gender == "F") %>% select(NPI)))
+```
+
+Since we do not know which gender is correct for these providers the following chunk deletes from the genent those that have both genders. Although this will affect any analysis of gender differences or entity differences the effects are likely to be very small given the very large number of providers and claims.
+
+```{r}
+genent <- genent %>%
+  filter(!(NPI %in% bigen$NPI))
+rm(bigen)
+```
+
+The following chunk demonstrates that the individual and organizational providers are disjoint sets.
+
+```{r}
+dplyr::intersect(filter(genent, entity.code == "I"), filter(genent, entity.code == "O"))
+```
+
+## HCPCS Table
+Create the HCPCS table. This table can be joined to the Claim table via hcpcs.code to provide descriptions of  services provided or claimed.
+
+The datasets provide information on some 6,451 HCPCS codes and over 1 million individual and orgainzartional providers. Corresponding to these there are fewer descriptions. That is, there are cases of multiple numeric codes that map to a common description. In its methodology documentation CMS explains that descriptions have been truncated to 256 characters. As a result, the same HCPCS description can be associated with more than one HCPCS code. We discuss this further below.
+
+
+Recall that some codes have the same description due to truncation by FDA. The following creates the unique code-description combinations:
+
+```{r}
+hcpcs <- puf %>%
+  select(hcpcs.code, hcpcs.description) %>%
+  distinct()
+n.codes <- hcpcs %>%
+  select(hcpcs.code) %>%
+  distinct() %>%
+  nrow()
+print(paste("number of code-description combinations = ", nrow(hcpcs)))
+print(paste("number of unique HCPCS codes = ", n.codes))
+```
+
+The preceding shows that some HCPCS have multiple descriptions. This is attributable to the truncation of descriptions as mentioned above. The following chunk picks one description at random to use as the unique description for purposes of the database. This does not discard information as the different descriptions are essentially the same and in many cases differ because of spelling errors or similar reasons.
+
+```{r}
+hcpcs <- hcpcs %>%
+  group_by(hcpcs.code) %>%
+  sample_n(1)
+```
+
+## Create "tsv" Files
+These will be copied into the Docker image.
+
+```{r}
+write_tsv(claim, "~/Documents/Workshop/RProjects/MedicarePUFDB/pufdbdocker/claim.tsv", col_names = FALSE)
+write_tsv(genent, "~/Documents/Workshop/RProjects/MedicarePUFDB/pufdbdocker/genent.tsv", col_names = FALSE)
+write_tsv(hcpcs, "~/Documents/Workshop/RProjects/MedicarePUFDB/pufdbdocker/hcpcs.tsv", col_names = FALSE)
+```
+
+## Clean Up
+We don't need puf anymore. Let's delete it to save memory and session start up time.
+
+```{r}
+rm(puf)
+gc()
+```
+
+# Part 2: Create the Docker Image
+
+Here we provide the DOcker commands and SQL code that create and load the database as a service encapsulated as a Docker container. The command and code are not intended to be executed here.
+
+The following duplicates the contents of the Dockerfile tht builds the image. After pulling the image drwo/mysql, the "tsv" files genent, claim and hcpcs  are copied into the specified directory in the container where they can be loaded into the database using the MySQL LOAD INFILE command.
+
+```{sh}
+FROM drwo/mysql
+
+COPY genent.tsv /var/lib/mysql-files/genent.tsv
+COPY claim.tsv /var/lib/mysql-files/claim.tsv
+COPY hcpcs.tsv /var/lib/mysql-files/hcpcs.tsv
+
+COPY pufdb.sql /docker-entrypoint-initdb.d/pufdb.sql
+RUN chmod 640 /docker-entrypoint-initdb.d/pufdb.sql
+```
+
+Generation of the Docker image concludes by executing the the SQL statements contained in the file pufdb.sql, duplicated here. After creating the database and its tables, the data contained in the "tsv" files are loaded into their respective tables. Finally we create a special purpose user "pufdbuser" whose privileges are limited to selecting form the database tables.
+
+```{sql}
+# create the databse and tables
+CREATE DATABASE IF NOT EXISTS CMS_PUF;
+
+CREATE TABLE IF NOT EXISTS CMS_PUF.HCPCS (
+	                  HCPCS_CODE VARCHAR(16) PRIMARY KEY,
+	                  DESCRIPTION VARCHAR(256));
+	                  
+CREATE TABLE IF NOT EXISTS CMS_PUF.GEN_ENT (
+	                  NPI VARCHAR(16) PRIMARY KEY,
+	                  GENDER CHAR(2),
+	                  PROV_TYPE CHAR(1));
+
+CREATE TABLE IF NOT EXISTS CMS_PUF.CLAIM (
+                  	P_KEY INT PRIMARY KEY,
+                  	NPI VARCHAR(24),
+                  	ZIP CHAR(5),
+                  	SVC_PLACE CHAR,
+                  	HCPCS_CODE VARCHAR(16),
+                  	DRUG_INDICATOR CHAR,
+                  	SVC_COUNT INT,
+                  	BENE_COUNT INT,
+                  	BENE_DAY_SVC_COUNT INT,
+                  	AVG_ALLOWED_AMT DOUBLE,
+                  	AVG_CHRG_AMT DOUBLE,
+                  	AVG_PAYMENT DOUBLE,
+                  	YR INT);
+                  	
+# load the data
+LOAD DATA INFILE '/var/lib/mysql-files/genent.tsv' INTO TABLE CMS_PUF.GEN_ENT;
+LOAD DATA INFILE '/var/lib/mysql-files/hcpcs.tsv' INTO TABLE CMS_PUF.HCPCS;
+LOAD DATA INFILE '/var/lib/mysql-files/claim.tsv' INTO TABLE CMS_PUF.CLAIM;
+
+# create the pufdbuser user with limited privileges
+CREATE USER 'pufdbuser'@'%' IDENTIFIED BY 'pufdbuser';
+GRANT SELECT ON CMS_PUF.* TO 'pufdbuser'@'%';
+
+```
+
+Finally, the following is the code for generating the Docker image from the preceding files. This assumes that the commands are executed form within the home directory of this project. The user must be logged in the Docker hub account "drwo" in order to do the push.
+
+```{sh}
+docker image build -t drwo/pufdb -f ./pufdbdocker/Dockerfile ./pufdbdocker
+docker push drwo/pufdb
+```

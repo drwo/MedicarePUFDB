@@ -1,0 +1,179 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Dataframes
+A dataframe is analogous to a spreadsheet. It is a fundamental R object that is invariably used when you are analyzing structured data.
+```{r}
+sclaims
+```
+
+# Operations on Dataframes
+A variety of different operations can be performed on dataframes using functions from various packages (particularly the package "dplyr") that either modify them, subset them in various ways or create new dataframes.
+
+## Selecting Columns Using "select"
+```{r}
+select(sclaims, NPI, svc.count)
+```
+
+## Selecting Rows Using "filter"
+```{r}
+filter(sclaims, svc.place == "F" & svc.count >= 50)
+```
+
+## Chaining Operations Using the "Pipe" Operator "%>%"
+The effect of the "%>%" operator is to use the left-hand side of the operator as the first argument to the right-hand side.
+```{r}
+filter(sclaims, svc.place == "F" & svc.count >= 50) %>%
+  select(NPI, svc.count)
+```
+
+Using the pipe operator the previous lines of code could have been written thusly:
+```{r}
+claims %>%
+  filter(svc.place == "F" & svc.count >= 50) %>%
+  select(NPI, svc.count)
+```
+
+## Creating New Variables With "mutate"
+```{r}
+sclaims %>%
+  mutate(total.payment = svc.count * avg.payment)
+```
+
+Note that in order to actually add the new column to the dataframe you must assign the result of your work back to the original data frame or to a new object:
+```{r}
+sclaims <- sclaims %>%
+  mutate(total.payment = svc.count * avg.payment)
+```
+or:
+```{r}
+new.sclaims <- sclaims %>%
+  mutate(total.payment = svc.count * avg.payment)
+```
+
+## Summarizing Data Using "group_by"
+The group_by function groups the data by the values of selected variables making the other variables available for summary or calculation by group.
+```{r}
+sclaims %>%
+  # mutate(total.payment = svc.count * avg.payment) %>%
+  group_by(year) %>%
+  summarize(total.svc = sum(svc.count), grand.total.payment = sum(total.payment))
+  
+```
+We can do hierarchical grouping:
+```{r}
+sclaims %>%
+  group_by(year, hcpcs.code) %>%
+  summarize(n = n()) 
+```
+
+# Functions
+All of the operators we have used above, "select", "filter", are functions. Functions are a very powerful and flexible aspect of R (as well as other programming languages). You can write your own functions. Learning to write functions well is learning by doing. This exceedingly simple introduction hardly scratches the surface.
+
+A function is an R object that takes R objects as "inputs" or "parameters", executes some code using the values of its inputs and then returns some R object as its output. This extremely simple example demonstrates the concepts.
+```{r}
+foo <- function(x, y) {
+  x + y
+}
+```
+
+```{r}
+foo(2, 2)
+```
+
+```{r}
+foo("Hello,", "World!")
+```
+
+Functions can call other functions:
+```{r}
+new.foo <- function(x, y) {
+  paste(x, y)
+}
+```
+
+```{r}
+new.foo("Hello,", "World!")
+```
+
+The arguments of functions can be given default values and the pipe operator can be used with them:
+```{r}
+foo <- function(x, y = 99) {
+  x + y
+}
+```
+
+```{r}
+-99 %>% foo()
+```
+
+```{r}
+100 %>% foo(-1)
+```
+
+# Intro to ggplot
+There is a plotting function called "plot" that is built into "base" R that recognizes a variety of objects. It is easy to use and can be customized to a certain extent. It can certainly be very helpful when all you need is a rough and ready plot. On the other hand "ggplot" is a function that provides an enormous amount of flexibility and cisomization and can be used to produce publication quality graphics. The tradeoff is that the learning curve is steeper.
+
+The following discussion shows how to build a publication quality graphic using a toy data set "rdata":
+
+```{r}
+summary(rdata)
+```
+Here we use the built in plot function. It recognizes that rdata is a dataframe consisting of 2 columns for which it produces a scatter plot:
+```{r}
+plot(rdata)
+```
+
+What might we want to do to turn this into into a professional looking pot? Add axes titles, add a plot title, add annotations, etc. Among other things, that is what ggplot can do for you. The simplest form of ggplot is:
+
+ggplot(data, aes(x =, y = )) + geom_xxx + geom_yyy 
+
+where data is the data to be plotted, x and y are set to the names of the columns to be plotted and other aesthetics of the plot (hence "aes") and "geom_xxx" and "geom_yyy" are the names of a "geom" that is the plot you want. The total plot consists of a number of geoms that are "layered" to produce the desired effect. Let's get started.
+
+```{r}
+rdata %>%
+  ggplot(aes(x = x, y = y)) + geom_point()
+```
+
+Let's smooth the data. This is an example of "layering"
+```{r}
+rdata %>%
+  ggplot(aes(x = x, y = y)) + geom_point() +
+  geom_smooth()
+```
+
+Let's set up some nice scales for the axes and add labels.
+```{r}
+rdata %>%
+  ggplot(aes(x = x, y = y)) + 
+  geom_point() +
+  geom_smooth() +
+  scale_x_continuous(breaks = seq(-100, 100, by = 10)) +
+  scale_y_continuous(breaks = seq(-7500, 15000, by = 2000)) +
+  labs(title = "My Random Data Plot", x= "-100 to 100 + rnorm(201, 0, 0.25)", y = "x^2 + rnorm(201, 0, 2500)")
+```
+
+Finally, just for fun let's color the points whose x value is less than 0 differently from those greater than zero:
+```{r}
+my.plot <- rdata %>%
+  ggplot(aes(x = x, y = y)) + 
+  geom_smooth() +
+  scale_x_continuous(breaks = seq(-100, 100, by = 10)) +
+  scale_y_continuous(breaks = seq(-7500, 15000, by = 2000)) +
+  labs(title = "My Random Data Plot", x= "-100 to 100 + rnorm(201, 0, 0.25)", y = "x^2 + rnorm(201, 0, 2500)")
+  # geom_point(data = filter(rdata, x < 0), aes(x = x, y = y), color = "red") + 
+  # geom_point(data = filter(rdata, x >= 0), aes(x = x, y = y), color = "green")
+my.plot
+```
+
+Finally let's make this look like a Hokie made it!
+
+```{r}
+my.plot + vt.theme +
+  geom_point(data = filter(rdata, x < 0), aes(x = x, y = y), color = "red") +
+  geom_point(data = filter(rdata, x >= 0), aes(x = x, y = y), color = "green")
+
+```
+

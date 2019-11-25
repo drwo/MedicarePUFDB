@@ -1,0 +1,415 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Introduction
+In the first part of this notebook we split the raw standardized data, "puf", into 3 tables: "claims", "providers" and "hcpcs". This eliminates redundancy in the data allowing us to delete "puf" thereby saving memory without significant loss of information. The reduction in data memory in turn results in faster loading. The overall result is a de-facto relational model that relates the 3 tables. 
+
+In part 2 we explore the data to identify possible inconsistencies or anomalies in the data such as a provider, identified by NPI, who is coded as an individual provider on some claims and an organizational provider on another. We then address some of these anomalies under certain assumptions and further simplify and standardize the tables.
+
+# Part 1. Tables
+The overall idea in creating the 3 tables is to separate the data strictly pertaining to a provider's claims , such as NPI, HCPCS code, number of services, etc from the provider's demographic data. Doing so results in the 2 tables "claims" and "providers". The third table, "hcpcs",  relates HCPCS codes to their descriptions.
+
+The following lists the column names in "puf" as a reference.
+```{r}
+colnames(puf)
+```
+
+## 1.1 Claims
+Referring to the column names from above, the claims table will consist of the columns ID (equivalent to a row number), year, NPI, zip, state, medicare.indicator, svc.place, hcpcs.code, drug.indicator, svc.count, bene.count, bene.day.svc.count, avg.allowed.amt, avg.chrg.amt, avg.payment.
+
+Note that it is not clear from CMS's methodology document whether the address information associated with a claim is where the services associated with the claim were delivered or merely the billing address of the provider. We have intentionally omitted street address information retaining zip and state information.
+```{r}
+(claims <- puf %>%
+  select(ID:NPI, zip, state, medicare.indicator:hcpcs.code, drug.indicator:avg.payment))
+```
+
+## 1.2 HCPCS
+The following defines the hcpcs table:
+```{r}
+(hcpcs <- puf %>%
+  select(hcpcs.code, hcpcs.description) %>%
+  distinct())
+```
+
+# 1.3 Providers
+The providers table consists of selected demographic information on providers. We have intentionally omitted org.name (which is surname for individual providers), mi and first name. NPI is sufficient to uniquely identify a provider. In addition, the format and spelling of names varies considerably from claim to claim, which is not shown here.
+```{r}
+(providers <- puf %>%
+   select(NPI, credentials, gender, entity.code, prov.type) %>%
+   distinct())
+```
+
+
+
+# Part2: Integrity Checks
+Except for the possibility of using additional data sources, we have no way of knowing whether the data associated with a claim is correct or anomalous. Therefore, our integrity checks apply only to the hcpcs and providers tables. 
+
+## Utility Functions
+These utility functions encapsualte or support various integrity checks.
+
+```{r non.uni}
+# this utility function is used below. It expects a tibble of 2 columns, does a group_by on the first column, counts with the n() function then filters for those groups for which the count > 1
+non.uni <- function(df) {
+  df %>% 
+    distinct() %>%
+    group_by(pull(., var = 1)) %>%
+    summarise(n = n()) %>%
+    filter(n > 1) 
+}
+```
+
+```{r}
+# Given a df, such as puf, that has NPI as a variable, this utility function returns its distinct NPIs.
+undup.npis <- function(df) {
+  df %>%
+    select(NPI) %>%
+    distinct()
+}
+```
+
+Given a df returned by count.svcs.prov.types this function returns the provider type associated with the largest number of services. If there is a tie it selects the first prov type.
+```{r}
+max.type <- function(df) {
+  df <- df %>%
+    filter(n == max(n))
+  if (nrow(df) > 1) {
+    df <- df[1, ]
+  }
+  df
+}
+```
+
+```{r}
+get.max.type <- function(df, by.func = max.type) {
+  c.names <- colnames(df)
+  df <- df %>%
+    ungroup() %>%
+    by(df$NPI, by.func) %>%
+    # sapply the transpose function
+    sapply(t) %>%
+    t()
+  colnames(df) <- c.names
+  as_tibble(df) %>%
+    mutate(n = as.integer(n))
+}
+```
+
+```{r}
+standardize.feature <- function(df, stnd.df, col.name) {
+  
+  f <- function(df) {
+    df
+  }
+  
+  g <- function(df) {
+    npi <- df[1, "NPI"] %>%
+      pull(NPI)
+    col.value <- stnd.df %>%
+      filter(NPI == npi) %>%
+      pull(col.name)
+    df$col.name <- col.value
+    df
+  }
+  
+  df.list <- by(df, df$NPI, f) %>%
+    lapply(g)
+  new.df <- df.list[[1]]
+  for (i in 2:length(df.list)) {
+    new.df <- bind_rows(new.df, df.list[[i]])
+  }
+  new.df 
+}
+```
+
+## 2.1 Providers
+
+### Provider Entity Type
+This section checks to see if there are any providers that are coded as both an individual (entity.code == "I") and organizational provider (entity.code == "O"). If there are none the following chunk should return the value 0.
+```{r}
+providers %>%
+  select(NPI, entity.code) %>%
+  non.uni() %>%
+  nrow()
+```
+
+In addition we check to see that there are no organizational providers that have a gender and that there are no individual providers without a gender. Both of the following chunks should return 0.
+```{r}
+providers %>% filter(entity.code == "O" & gender %in% c("M", "F")) %>% nrow()
+```
+
+```{r}
+providers %>% filter(entity.code == "I" & !(gender %in% c("M", "F"))) %>% nrow()
+```
+
+Now calculate the distinct number of each type of provider and check to see if the number of individual providers plus the number of organizational providers equals the total number. The last line of this chunk should return true.
+
+```{r}
+count.providers <- function(code, p = providers) {
+  p %>%
+    select(NPI, entity.code) %>%
+    filter(entity.code == code) %>%
+    distinct() %>%
+    nrow()
+}
+n.iproviders <- count.providers("I")
+n.oproviders <- count.providers("O")
+n.providers <- providers %>%
+  select(NPI) %>%
+  distinct() %>%
+  nrow()
+n.providers == n.iproviders + n.oproviders
+```
+
+There are `r format(n.iproviders, big.mark = ",")` individual providers, `r format(n.oproviders, big.mark = ",")` for a total of `r format(n.providers, big.mark = ",")` unique providers.
+
+### Provider Gender
+This section checks to see if there are any individual providers (entity.code = "I") who are coded as both male and female. The following chunk calculates the number of providers that are coded both ways. If there are none the calculation should return 0.
+```{r}
+(n.dual.gender <- providers %>%
+  select(NPI, gender) %>%
+  non.uni() %>%
+  nrow())
+```
+
+There are `r n.dual.gender` providers who are coded both ways. The following table shows the providers whose gender coding varies. 
+```{r}
+dual.gender <- providers %>%
+  select(NPI, gender) %>%
+  non.uni() %>%
+  rename(NPI = `pull(., var = 1)`)
+(dual.gender <- providers %>% filter(NPI %in% dual.gender$NPI) %>%
+  select(NPI, gender) %>%
+  distinct() %>%
+  arrange(NPI))
+```
+
+
+The following chunk finds out how many times each gender code used on a claim for those NPIs that had both codes. We have to use puf as the foundation for this because the providers table does not have information on service counts (svc.count).
+```{r}
+(dual.gender <- puf[puf$NPI %in% dual.gender$NPI, ] %>%
+  select(NPI, gender, svc.count) %>% 
+  group_by(NPI, gender) %>% 
+  summarise(n = sum(svc.count)) )
+```
+
+This chunk finds the gender that is associated with the greatest number of services 
+```{r}
+(dual.gender <- get.max.type(dual.gender))
+```
+
+The following chunk standardizes gender based on greatest number of services:
+```{r}
+x <- providers %>% filter(NPI %in% dual.gender$NPI) %>%
+  arrange(NPI) %>%
+  standardize.feature(dual.gender, "gender") %>%
+  mutate(gender = col.name) %>%
+  select(-col.name) %>%
+  distinct()
+providers <- providers %>%
+  filter(!(NPI %in% dual.gender$NPI)) %>%
+  bind_rows(x) %>%
+  distinct()
+```
+
+### Provider Type
+This section standardizes provider type, or "specialty", similar to how we standardized gender. 
+
+How many providers used multiple provider types?
+```{r}
+(n.multi.prov.types <- providers %>%
+  select(NPI, prov.type) %>%
+  non.uni() %>%
+  nrow())
+```
+
+There are `r n.multi.prov.types` providers who used multiple provider types. The following table shows these providers. 
+```{r}
+multi.prov.types <- providers %>%
+  select(NPI, prov.type) %>%
+  non.uni() %>%
+  rename(NPI = `pull(., var = 1)`)
+(multi.prov.types <- providers %>% filter(NPI %in% multi.prov.types$NPI) %>%
+  select(NPI, prov.type) %>%
+  distinct() %>%
+  arrange(NPI))
+```
+
+The following chunk finds out how many times each provider type was used on a claim for those NPIs that had multiple types. We have to use puf as the foundation for this because the providers table does not have information on service counts (svc.count).
+```{r}
+(multi.prov.types <- puf[puf$NPI %in% multi.prov.types$NPI, ] %>%
+  select(NPI, prov.type, svc.count) %>% 
+  group_by(NPI, prov.type) %>% 
+  summarise(n = sum(svc.count)) )
+```
+
+This chunk finds the prov.type that is associated with the greatest number of services 
+```{r}
+(multi.prov.types <- get.max.type(multi.prov.types))
+```
+
+Finally, the following chunk standardizes prov.type based on greatest number of services:
+```{r}
+x <- providers %>% filter(NPI %in% multi.prov.types$NPI) %>%
+  arrange(NPI) %>%
+  standardize.feature(multi.prov.types, "prov.type") %>%
+  mutate(prov.type = col.name) %>%
+  select(-col.name) %>%
+  distinct()
+providers <- providers %>%
+  filter(!(NPI %in% multi.prov.types$NPI)) %>%
+  bind_rows(x) %>%
+  distinct()
+providers
+```
+
+### Provider Credentials
+This section standardizes provider credentials similar to how we standardized gender and provider type (specialty). 
+
+How many providers used multiple multiple credentials?
+```{r}
+(n.multi.credentials <- providers %>%
+  select(NPI, credentials) %>%
+  non.uni() %>%
+  nrow())
+```
+
+There are `r n.multi.credentials` providers who used multiple provider types. The following table shows these providers. 
+```{r}
+multi.credentials <- providers %>%
+  select(NPI, credentials) %>%
+  non.uni() %>%
+  rename(NPI = `pull(., var = 1)`)
+(multi.credentials <- providers %>% filter(NPI %in% multi.credentials$NPI) %>%
+  select(NPI, credentials) %>%
+  distinct() %>%
+  arrange(NPI))
+```
+
+The following chunk finds out how many times each credential was used on a claim for those NPIs that declared multiple credentials. We have to use puf as the foundation for this because the providers table does not have information on service counts (svc.count).
+```{r}
+(multi.credentials <- puf[puf$NPI %in% multi.credentials$NPI, ] %>%
+  select(NPI, credentials, svc.count) %>% 
+  group_by(NPI, credentials) %>% 
+  summarise(n = sum(svc.count)) )
+```
+
+This chunk finds the credential that is associated with the greatest number of services 
+```{r}
+(multi.credentials <- get.max.type(multi.credentials))
+```
+
+Finally, the following chunk standardizes credentials based on greatest number of services:
+```{r}
+x <- providers %>% filter(NPI %in% multi.credentials$NPI) %>%
+  arrange(NPI) %>%
+  standardize.feature(multi.credentials, "credentials") %>%
+  mutate(credentials = col.name) %>%
+  select(-col.name) %>%
+  distinct()
+providers <- providers %>%
+  filter(!(NPI %in% multi.credentials$NPI)) %>%
+  bind_rows(x) %>%
+  distinct()
+providers
+```
+
+
+```{r}
+(providers %>% select(prov.type) %>% distinct() %>% arrange(prov.type))
+```
+
+## 2.2 HCPCS Codes
+
+This section standardizes the descriptions of HCPCS codes. 
+
+How many HCPCS codes multiple multiple descriptions?
+```{r}
+(n.multi.hcpcs <- hcpcs %>%
+  non.uni() %>%
+  nrow())
+```
+
+There are `r n.multi.hcpcs` HCPCS codes that have multiple descriptions. The following table shows them. 
+```{r}
+multi.descriptors <- hcpcs %>%
+  non.uni() %>%
+  rename(hcpcs.code = `pull(., var = 1)`)
+(multi.descriptors <- hcpcs %>% filter(hcpcs.code %in% multi.descriptors$hcpcs.code) %>%
+  distinct() %>%
+  arrange(hcpcs.code))
+```
+
+The following chunk finds out how many times each description was used on a claim for those HCPCS codes that had multiple descriptions. We have to use puf as the foundation for this because the providers table does not have information on service counts (svc.count).
+```{r}
+(multi.descriptors <- puf[puf$hcpcs.code %in% multi.descriptors$hcpcs.code, ] %>%
+  select(hcpcs.code, hcpcs.description, svc.count) %>% 
+  group_by(hcpcs.code, hcpcs.description) %>% 
+  summarise(n = sum(svc.count)) )
+```
+
+This chunk finds the description that is associated with the greatest number of services 
+```{r}
+get.max.description <- function(df, by.func = max.type) {
+  c.names <- colnames(df)
+  df <- df %>%
+    ungroup() %>%
+    by(df$hcpcs.code, by.func) %>%
+    # sapply the transpose function
+    sapply(t) %>%
+    t()
+  colnames(df) <- c.names
+  as_tibble(df) %>%
+    mutate(n = as.integer(n))
+}
+(multi.descriptors <- get.max.description(multi.descriptors))
+```
+
+Finally, the following chunk standardizes HCPCS descriptions based on greatest number of services:
+```{r}
+standardize.hcpcs <- function(df, stnd.df, col.name) {
+  
+  f <- function(df) {
+    df
+  }
+  
+  g <- function(df) {
+    code <- df[1, "hcpcs.code"] %>%
+      pull(hcpcs.code)
+    col.value <- stnd.df %>%
+      filter(hcpcs.code == code) %>%
+      pull(col.name)
+    df$col.name <- col.value
+    df
+  }
+  
+  df.list <- by(df, df$hcpcs.code, f) %>%
+    lapply(g)
+  new.df <- df.list[[1]]
+  for (i in 2:length(df.list)) {
+    new.df <- bind_rows(new.df, df.list[[i]])
+  }
+  new.df 
+}
+
+x <- hcpcs %>% filter(hcpcs.code %in% multi.descriptors$hcpcs.code) %>%
+  arrange(hcpcs.code) %>%
+  standardize.hcpcs(multi.descriptors, "hcpcs.description") %>%
+  mutate(hcpcs.description = col.name) %>%
+  select(-col.name) %>%
+  distinct()
+hcpcs <- hcpcs %>%
+  filter(!(hcpcs.code %in% multi.descriptors$hcpcs.code)) %>%
+  bind_rows(x) %>%
+  distinct() %>%
+  arrange(hcpcs.code)
+hcpcs
+```
+
+At this point we should no longer need the object puf. We save and delete it to conserve memory.
+```{r}
+save(puf, file = paste0(getwd(), "/rawData/puf.RData"))
+rm(puf)
+gc()
+```
